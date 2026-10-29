@@ -6,6 +6,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.Voice;
@@ -127,7 +129,17 @@ public final class SetupActivity extends Activity {
             prepare.setEnabled(false);
             turkishReady=false;
             spanishReady=false;
-            modelsStatus.setText("Comprobando ambos idiomas…");
+            modelsStatus.setText("Comprobando modelos instalados…");
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (!turkishReady || !spanishReady) {
+                    prepare.setEnabled(true);
+                    modelsStatus.setText("La preparación sigue pendiente. " +
+                        "ML Kit necesita descargar modelos inicialmente; " +
+                        "comprueba conexión de datos, espacio y servicios Google. " +
+                        "Turco → español: " + (turkishReady?"LISTO":"PENDIENTE") +
+                        "\nEspañol → turco: " + (spanishReady?"LISTO":"PENDIENTE"));
+                }
+            }, 25000);
             if(models==null) models=new OfflineTranslation(this);
             models.prepare(new OfflineTranslation.Callback() {
                 @Override public void onSuccess(String s) { runOnUiThread(() -> {
@@ -146,6 +158,18 @@ public final class SetupActivity extends Activity {
             });
         });
 
+        Button translateTest=button(root,"PROBAR TRADUCTOR LOCAL SIN MICRÓFONO");
+        translateTest.setOnClickListener(v -> {
+            if (models==null) models=new OfflineTranslation(this);
+            modelsStatus.setText("Probando traducción neuronal con texto turco conocido…");
+            models.translate("tr","Merhaba, nasılsın?",new OfflineTranslation.Callback() {
+                @Override public void onSuccess(String value) { runOnUiThread(() ->
+                    modelsStatus.setText("Prueba texto turco: Merhaba, nasılsın?\n" +
+                        "Resultado español: " + value)); }
+                @Override public void onFailure(String err) { runOnUiThread(() ->
+                    modelsStatus.setText("El traductor NO está funcionando: " + err)); }
+            });
+        });
         voicesStatus=label("Voces offline: comprobando…",15);
         root.addView(voicesStatus);
         diagnostics=label("",14);
@@ -215,8 +239,19 @@ public final class SetupActivity extends Activity {
             .getString("last_asr_error","");
         String translationError=getSharedPreferences("smartfk",MODE_PRIVATE)
             .getString("last_translate_error","");
-        diagnostics.setText((error.isEmpty()?"":"Último error del micrófono/modelos: "+error)
-            +(translationError.isEmpty()?"":"\nÚltimo error de traducción: "+translationError));
+        android.content.SharedPreferences prefs=getSharedPreferences("smartfk",MODE_PRIVATE);
+        String raw=prefs.getString("last_asr_text","");
+        String source=prefs.getString("last_asr_language","");
+        int pcm=prefs.getInt("last_pcm_average",-1);
+        boolean silenced=prefs.getBoolean("audio_client_silenced",false);
+        long heartbeat=prefs.getLong("last_audio_heartbeat",0);
+        String audio = heartbeat==0?"Sin captura comprobada":
+            (System.currentTimeMillis()-heartbeat<8000?"Captura reciente":"Captura antigua") +
+            " · señal PCM: "+pcm+" · silenciado por Android: "+(silenced?"SÍ":"NO");
+        diagnostics.setText("DIAGNÓSTICO REAL\nMicrófono: "+audio+
+            "\nReconocimiento Vosk: "+(raw.isEmpty()?"Aún sin palabras reconocidas":source+": "+raw)+
+            (error.isEmpty()?"":"\nError de audio: "+error)+
+            (translationError.isEmpty()?"":"\nError de traducción: "+translationError));
     }
 
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results) {
