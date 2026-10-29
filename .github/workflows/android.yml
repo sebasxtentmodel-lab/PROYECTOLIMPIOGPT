@@ -84,10 +84,25 @@ jobs:
             set -e
             adb install /tmp/apk/app-debug.apk
             adb shell pm grant com.smartfk.keyboard android.permission.RECORD_AUDIO
-            adb shell ime enable com.smartfk.keyboard/.SmartFkInputMethod
-            adb shell ime set com.smartfk.keyboard/.SmartFkInputMethod
             adb shell am start -n com.smartfk.keyboard/.SetupActivity
-            sleep 4
+            sleep 3
+            adb shell ime list -a
+            IME_ID=""
+            for i in $(seq 1 20); do
+              IME_ID=$(adb shell ime list -s | tr -d '\r' | grep -m1 'com.smartfk.keyboard' || true)
+              if [ -n "$IME_ID" ]; then break; fi
+              sleep 2
+            done
+            if [ -z "$IME_ID" ]; then
+              echo "Android didn't register SmartFk as input method:"
+              adb shell ime list -a
+              adb shell dumpsys package com.smartfk.keyboard | grep -A 12 -B 8 SmartFkInputMethod || true
+              exit 1
+            fi
+            echo "Android IME registry ID: $IME_ID"
+            adb shell ime enable "$IME_ID"
+            adb shell ime set "$IME_ID"
+            sleep 3
             adb shell input swipe 400 1400 400 470 400
             sleep 2
             adb shell uiautomator dump /sdcard/smartfk-ui.xml
