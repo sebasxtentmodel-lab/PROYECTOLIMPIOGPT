@@ -25,6 +25,11 @@ final class OfflineTranslation {
     }
 
     void prepare(Callback cb) {
+        if (turkishReady && spanishReady) {
+            cb.onSuccess("Modelo turco → español listo");
+            cb.onSuccess("Modelo español → turco listo");
+            return;
+        }
         DownloadConditions conditions = new DownloadConditions.Builder().build();
         trEs.downloadModelIfNeeded(conditions)
             .addOnSuccessListener(v -> {
