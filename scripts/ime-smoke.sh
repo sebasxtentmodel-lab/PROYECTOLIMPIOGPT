@@ -27,6 +27,26 @@ for i in $(seq 1 75); do
   fi
   sleep 2
 done
+echo 'Testing real Turkish and Spanish speech with Vosk and Whisper...'
+adb logcat -c
+adb shell am start -n com.smartfk.keyboard/.AsrSmokeTestActivity
+for i in $(seq 1 150); do
+  LOG=$(adb logcat -d -s SMARTFK_ASR_TEST:I '*:S' || true)
+  if echo "$LOG" | grep -q 'ASR_TEST_FAILED'; then
+    echo "$LOG"
+    exit 1
+  fi
+  if echo "$LOG" | grep -q 'ASR_TEST_COMPLETE'; then
+    echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|ASR_TEST_COMPLETE'
+    break
+  fi
+  if [ "$i" -eq 150 ]; then
+    echo "$LOG"
+    echo 'ERROR: speech decoding did not finish'
+    exit 1
+  fi
+  sleep 2
+done
 adb shell am start -n com.smartfk.keyboard/.SetupActivity
 sleep 3
 
