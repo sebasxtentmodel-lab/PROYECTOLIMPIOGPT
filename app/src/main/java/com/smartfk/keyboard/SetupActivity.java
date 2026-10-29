@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -53,7 +54,7 @@ public final class SetupActivity extends Activity {
         for (int i=0;i<keys.length;i++) {
             final String language=keys[i];
             RadioButton b=new RadioButton(this);
-            b.setId(ViewGroup.generateViewId());
+            b.setId(View.generateViewId());
             b.setText(labels[i]);
             b.setTextColor(0xFF111111);
             choices.addView(b);
