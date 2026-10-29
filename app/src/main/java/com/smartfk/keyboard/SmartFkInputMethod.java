@@ -193,7 +193,7 @@ public final class SmartFkInputMethod extends InputMethodService {
         lastPartialRequest=now;
         final long serial=++partialSerial;
         final long token=session;
-        translate.translate(lang, words,new OfflineTranslation.Callback() {
+        translate.translatePreview(lang, words,new OfflineTranslation.Callback() {
             @Override public void onSuccess(String translation) {
                 ui.post(() -> {
                     if (!active || session!=token || serial!=partialSerial || speaking) return;
