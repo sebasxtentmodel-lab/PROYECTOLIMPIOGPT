@@ -1,0 +1,41 @@
+name: SmartFk Android APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Bundle small offline speech recognition models
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/models /tmp/smartfk-asr
+          cd /tmp/smartfk-asr
+          for name in vosk-model-small-tr-0.3 vosk-model-small-es-0.42; do
+            curl -fsSL --retry 3 --retry-delay 3 "https://alphacephei.com/vosk/models/${name}.zip" -o "${name}.zip"
+            unzip -q "${name}.zip"
+          done
+          cp -a vosk-model-small-tr-0.3 "$GITHUB_WORKSPACE/app/src/main/assets/models/tr"
+          cp -a vosk-model-small-es-0.42 "$GITHUB_WORKSPACE/app/src/main/assets/models/es"
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Publish installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartFk-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
