@@ -44,6 +44,7 @@ final class ContinuousVoice {
     private volatile String activeMode="";
     private Thread captureThread, recognizerThread;
     private boolean restartPending;
+    private Thread pendingRestarter;
     private String previousLanguage="tr", lastFinalText="";
     private long lastFinalAt,lastEmittedEndMs;
     private int droppedFrames;
@@ -68,12 +69,14 @@ final class ContinuousVoice {
             if(!currentMode().equals(activeMode)){
                 restartPending=true;
                 stopCaptureOnly();
+                awaitOldSession();
             }
             return;
         }
         if((captureThread!=null && captureThread.isAlive())||
            (recognizerThread!=null && recognizerThread.isAlive())){
             restartPending=true;
+            awaitOldSession();
             return;
         }
         activeMode=currentMode();
@@ -91,6 +94,30 @@ final class ContinuousVoice {
     synchronized void stop() {
         restartPending=false;
         stopCaptureOnly();
+    }
+    /**
+     * A rapid keyboard switch may call start() while the old decoder is still
+     * closing. Wait off the UI thread and restart only if the IME remains active.
+     */
+    private synchronized void awaitOldSession(){
+        if(pendingRestarter!=null && pendingRestarter.isAlive())return;
+        final Thread oldCapture=captureThread, oldDecoder=recognizerThread;
+        pendingRestarter=new Thread(()->{
+            try{
+                if(oldCapture!=null)oldCapture.join();
+                if(oldDecoder!=null)oldDecoder.join();
+            }catch(InterruptedException e){
+                Thread.currentThread().interrupt();
+                return;
+            }
+            synchronized(ContinuousVoice.this){
+                if(restartPending){
+                    restartPending=false;
+                    start();
+                }
+            }
+        },"smartfk-voice-restart");
+        pendingRestarter.start();
     }
     private void stopCaptureOnly(){
         running=false;
@@ -226,13 +253,7 @@ final class ContinuousVoice {
                 +": "+error.getMessage());
         }finally{
             if(whisper!=null)whisper.close();
-            synchronized(this){
-                recognizerThread=null;
-                if(!running && restartPending && (captureThread==null || !captureThread.isAlive())){
-                    restartPending=false;
-                    start();
-                }
-            }
+            synchronized(this){recognizerThread=null;}
         }
     }
 
