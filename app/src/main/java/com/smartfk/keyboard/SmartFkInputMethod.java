@@ -154,23 +154,8 @@ public final class SmartFkInputMethod extends InputMethodService {
         lastRecognizedAudio = SystemClock.elapsedRealtime();
         current = null;
         followingLatest = true;
-        final long token = session;
-        String source = getSharedPreferences("smartfk",Context.MODE_PRIVATE)
-            .getString("source_language","tr");
-        OfflineTranslation.Callback callback = new OfflineTranslation.Callback() {
-            @Override public void onSuccess(String text) {
-                android.util.Log.i("SmartFk",text);
-            }
-            @Override public void onFailure(String err) {
-                android.util.Log.e("SmartFk",err);
-                ui.post(() -> {
-                    if (active && session==token)
-                        showDiagnostic("Traducción sin preparar: " + err);
-                });
-            }
-        };
-        if ("auto".equals(source)) translate.prepare(callback);
-        else translate.prepareSource(source,callback);
+        // Do not load Vosk and neural translation models simultaneously on a
+        // 4 GB device. The translator lazily opens only after ASR finds words.
         getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
             .remove("last_asr_error").remove("last_translate_error")
             .remove("last_asr_text").apply();
