@@ -1,0 +1,34 @@
+# Android/Gradle
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.hprof
+
+# Android Studio/IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Secrets/keys
+*.keystore
+*.jks
+*.p12
+.env
+.env.*
+
+# Large local models (published separately)
+models/
+*.onnx
+*.gguf
+*.ggml
+*.tflite
