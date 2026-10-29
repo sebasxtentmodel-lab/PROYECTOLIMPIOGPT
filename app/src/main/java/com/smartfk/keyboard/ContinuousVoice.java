@@ -29,6 +29,7 @@ final class ContinuousVoice {
     private volatile boolean suppressRecognition;
     private volatile AudioRecord recorder;
     private Thread worker;
+    private boolean pendingStart;
     private String previousLanguage = "tr";
 
     ContinuousVoice(Context context, Events events) {
@@ -37,7 +38,8 @@ final class ContinuousVoice {
     }
 
     synchronized void start() {
-        if (running || (worker != null && worker.isAlive())) return;
+        if (running) return;
+        if (worker != null && worker.isAlive()) { pendingStart = true; return; }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             events.error("Falta permiso de micrófono"); return;
@@ -49,6 +51,7 @@ final class ContinuousVoice {
 
     synchronized void stop() {
         running = false;
+        pendingStart = false;
         AudioRecord r = recorder;
         if (r != null) try { r.stop(); } catch (Exception ignored) {}
     }
@@ -109,8 +112,15 @@ final class ContinuousVoice {
                 catch (Exception ignored) {}
                 r.release();
             }
-            recorder = null;
-            running = false;
+            synchronized (this) {
+                recorder = null;
+                worker = null;
+                running = false;
+                if (pendingStart) {
+                    pendingStart = false;
+                    start();
+                }
+            }
         }
     }
 
