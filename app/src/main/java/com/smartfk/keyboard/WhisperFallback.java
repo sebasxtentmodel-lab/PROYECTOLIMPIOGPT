@@ -12,102 +12,114 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.LongSupplier;
 
-/** AudioRecord runs independently of Whisper; decoding never blocks capture. */
+/** Background Turkish-specialized Sherpa-ONNX ASR and multilingual whisper.cpp.
+ * AudioRecord continuously supplies chunks without ever waiting for inference.
+ */
 final class WhisperFallback {
-    private static final int WINDOW=16000*5;
-    private static final String ASSET="whisper/ggml-base-q5_1.bin";
+    private static final String WHISPER_ASSET="whisper/ggml-base-q5_1.bin";
     private final Context context;
     private final ContinuousVoice.Events events;
     private final ExecutorService decoder=Executors.newSingleThreadExecutor(r -> {
-        Thread t=new Thread(r,"smartfk-whisper");t.setPriority(Thread.NORM_PRIORITY-1);return t;
+        Thread t=new Thread(r,"smartfk-turkish-sherpa");t.setPriority(Thread.NORM_PRIORITY-1);return t;
     });
-    private final short[] window=new short[WINDOW];
+    private final short[] window;
     private final String configuredSource;
     private final LongSupplier latestVoskResult;
+    private final boolean specializedTurkish;
     private int used;
-    private volatile boolean closed, decoding;
+    private volatile boolean closed, decoding, specializedWorking=true;
     private long modelHandle;
+    private TurkishSherpa turkishEngine;
 
-    WhisperFallback(Context context,ContinuousVoice.Events events,String configuredSource,
+    WhisperFallback(Context context, ContinuousVoice.Events events, String configuredSource,
                     LongSupplier latestVoskResult) {
-        this.context=context;
+        this.context=context.getApplicationContext();
         this.events=events;
         this.configuredSource=configuredSource;
         this.latestVoskResult=latestVoskResult;
+        specializedTurkish=!"es".equals(configuredSource);
+        window=new short[16000*(specializedTurkish?8:5)];
     }
+    boolean prefersTurkishFinals(){ return specializedTurkish && specializedWorking; }
     void feed(short[] audio,int count,long lastVoskAt) {
         if(closed)return;
-        int n=Math.min(count,audio.length), index=0;
-        while(index<n) {
-            int take=Math.min(n-index,WINDOW-used);
+        int n=Math.min(count,audio.length),index=0;
+        while(index<n){
+            int take=Math.min(n-index,window.length-used);
             System.arraycopy(audio,index,window,used,take);
             used+=take;index+=take;
-            if(used==WINDOW) {
-                short[] candidate=Arrays.copyOf(window,WINDOW);
+            if(used==window.length){
+                short[] candidate=Arrays.copyOf(window,window.length);
                 used=0;
-                long now=SystemClock.elapsedRealtime();
-                if(!decoding && (lastVoskAt==0 || now-lastVoskAt>4200) && audible(candidate)) {
+                if(!decoding && audible(candidate) &&
+                        (specializedTurkish || lastVoskAt==0 ||
+                         SystemClock.elapsedRealtime()-lastVoskAt>4200)){
                     decoding=true;
                     decoder.execute(()->transcribe(candidate,lastVoskAt));
                 }
             }
         }
     }
-    private boolean audible(short[] audio) {
+    private boolean audible(short[] audio){
         long sum=0;
         for(int i=0;i<audio.length;i+=8)sum+=Math.abs((int)audio[i]);
         return sum/(audio.length/8)>65;
     }
-    private void transcribe(short[] pcm,long voskSnapshot) {
-        try {
+    private void transcribe(short[] pcm,long voskSnapshot){
+        try{
             if(closed)return;
-            if(modelHandle==0) {
-                File out=new File(context.getNoBackupFilesDir(),"smartfk-whisper-base-q5_1.bin");
-                if(!out.isFile()||out.length()<50000000L) {
-                    File tmp=new File(out.getAbsolutePath()+".tmp");
-                    try(InputStream in=context.getAssets().open(ASSET);
-                        FileOutputStream fos=new FileOutputStream(tmp)) {
-                        byte[] buffer=new byte[32768];int n;
-                        while((n=in.read(buffer))!=-1)fos.write(buffer,0,n);
-                    }
-                    if(!tmp.renameTo(out))throw new IllegalStateException("Error guardando Whisper");
-                }
-                modelHandle=WhisperCpp.nativeOpen(out.getAbsolutePath());
-                if(modelHandle==0)throw new IllegalStateException("No cargó modelo Whisper");
+            String source,words;
+            if(specializedTurkish && specializedWorking){
+                if(turkishEngine==null)turkishEngine=new TurkishSherpa(context);
+                words=turkishEngine.transcribe(pcm);
+                source="tr";
+            } else {
+                String result=runWhisperCpp(pcm);
+                int sep=result.indexOf('\n');
+                String guessed=sep<0?"":result.substring(0,sep).trim();
+                words=sep<0?result.trim():result.substring(sep+1).trim();
+                source="es".equals(guessed)?"es":"tr".equals(guessed)?"tr":configuredSource;
+                if(latestVoskResult.getAsLong()>voskSnapshot)return;
             }
-            float[] data=new float[pcm.length];
-            for(int i=0;i<pcm.length;i++)data[i]=pcm[i]/32768f;
-            String[] lang="auto".equals(configuredSource)
-                ?new String[]{"tr","es"}:new String[]{configuredSource};
-            byte[] result=WhisperCpp.nativeTranscribe(modelHandle,data,lang,false,null,1,2);
-            if(result==null || closed)return;
-            String raw=new String(result,StandardCharsets.UTF_8);
-            int sep=raw.indexOf('\n');
-            String actual=sep<0?"":raw.substring(0,sep).trim();
-            String words=sep<0?raw.trim():raw.substring(sep+1).trim();
-            String src="es".equals(actual)?"es":"tr".equals(actual)?"tr":configuredSource;
-            if(("tr".equals(src)||"es".equals(src))&&!words.isEmpty()
-                    && !words.matches("(?i).*\\[(music|noise|silence)\\].*")) {
-                // Vosk may recognize the same utterance while Whisper is decoding.
-                // Do not append a second translation for the already-recognized speech.
-                if (latestVoskResult.getAsLong() > voskSnapshot) return;
-                events.finalWords(src,words);
-            }
-        } catch (Throwable ex) {
-            android.util.Log.e("SmartFk","Whisper fallback failed",ex);
-            events.error("Whisper: "+ex.getClass().getSimpleName()+": "+ex.getMessage());
+            if(closed || words.isEmpty() || !("tr".equals(source)||"es".equals(source)))return;
+            if(words.matches("(?i).*(\\[(music|noise|silence)\\]|al\\u0131nt\\u0131|m\\u00fczik).*"))return;
+            events.finalWords(source,words);
+        } catch(Throwable error) {
+            if(specializedTurkish)specializedWorking=false;
+            android.util.Log.e("SmartFk","Offline ASR failed",error);
+            events.error("Motor turco: "+error.getClass().getSimpleName()+": "+error.getMessage());
         } finally {
             decoding=false;
         }
+    }
+    private String runWhisperCpp(short[] pcm)throws Exception {
+        if(modelHandle==0){
+            File out=new File(context.getNoBackupFilesDir(),"smartfk-whisper-base-q5_1.bin");
+            if(!out.isFile()||out.length()<50000000L){
+                File tmp=new File(out.getAbsolutePath()+".tmp");
+                try(InputStream in=context.getAssets().open(WHISPER_ASSET);
+                    FileOutputStream os=new FileOutputStream(tmp)){
+                    byte[] buf=new byte[32768];int n;
+                    while((n=in.read(buf))!=-1)os.write(buf,0,n);
+                }
+                if(!tmp.renameTo(out))throw new IllegalStateException("Error guardando Whisper");
+            }
+            modelHandle=WhisperCpp.nativeOpen(out.getAbsolutePath());
+            if(modelHandle==0)throw new IllegalStateException("No cargó modelo Whisper");
+        }
+        float[] input=new float[pcm.length];
+        for(int i=0;i<pcm.length;i++)input[i]=pcm[i]/32768f;
+        String[] languages="auto".equals(configuredSource)?
+                new String[]{"tr","es"}:new String[]{configuredSource};
+        byte[] result=WhisperCpp.nativeTranscribe(modelHandle,input,languages,false,null,1,2);
+        return result==null?"":new String(result,StandardCharsets.UTF_8);
     }
     void reset(){used=0;}
     void close(){
         closed=true;
         decoder.execute(()->{
-            if(modelHandle!=0){
-                WhisperCpp.nativeClose(modelHandle);
-                modelHandle=0;
-            }
+            if(turkishEngine!=null){turkishEngine.close();turkishEngine=null;}
+            if(modelHandle!=0){WhisperCpp.nativeClose(modelHandle);modelHandle=0;}
         });
         decoder.shutdown();
     }
