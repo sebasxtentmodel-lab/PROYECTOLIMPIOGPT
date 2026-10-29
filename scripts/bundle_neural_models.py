@@ -68,9 +68,9 @@ for lang,files in CATALOG["pairs"].items():
         if output.stat().st_size!=entry["raw_size"] or sha(output)!=entry["sha256_raw"]:
             raise ValueError("Uncompressed Mozilla model checksum mismatch: "+str(output))
         print("Mozilla verified",lang,name,output.stat().st_size,flush=True)
-url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin"
-out=WHISPER/"ggml-tiny-q5_1.bin"
+url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+out=WHISPER/"ggml-base-q5_1.bin"
 fetch(url,out)
-expected="818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"
+expected="422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
 if sha(out)!=expected:raise ValueError("Whisper tiny multilingual SHA-256 mismatch")
 print("All offline neural assets verified; no placeholders or mocked models.",flush=True)
