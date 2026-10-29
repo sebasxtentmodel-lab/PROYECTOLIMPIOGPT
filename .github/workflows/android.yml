@@ -80,48 +80,11 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          script: |
-            set -e
-            adb install /tmp/apk/app-debug.apk
-            adb shell pm grant com.smartfk.keyboard android.permission.RECORD_AUDIO
-            adb shell am start -n com.smartfk.keyboard/.SetupActivity
-            sleep 3
-            adb shell ime list -a
-            IME_ID=""
-            for i in $(seq 1 20); do
-              IME_ID=$(adb shell ime list -s | tr -d '\r' | grep -m1 'com.smartfk.keyboard' || true)
-              if [ -n "$IME_ID" ]; then break; fi
-              sleep 2
-            done
-            if [ -z "$IME_ID" ]; then
-              echo "Android didn't register SmartFk as input method:"
-              adb shell ime list -a
-              adb shell dumpsys package com.smartfk.keyboard | grep -A 12 -B 8 SmartFkInputMethod || true
-              exit 1
-            fi
-            echo "Android IME registry ID: $IME_ID"
-            adb shell ime enable "$IME_ID"
-            adb shell ime set "$IME_ID"
-            sleep 3
-            adb shell input swipe 400 1400 400 470 400
-            sleep 2
-            adb shell uiautomator dump /sdcard/smartfk-ui.xml
-            adb exec-out cat /sdcard/smartfk-ui.xml > /tmp/smartfk-ui.xml
-            python3 - <<'PY'
-            import re, subprocess, xml.etree.ElementTree as ET
-            tree=ET.parse('/tmp/smartfk-ui.xml')
-            fields=[n for n in tree.iter() if n.get('class')=='android.widget.EditText']
-            if not fields: raise RuntimeError('SmartFk text field not found')
-            m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',fields[0].get('bounds',''))
-            if not m: raise RuntimeError('EditText missing bounds')
-            x1,y1,x2,y2=map(int,m.groups())
-            subprocess.check_call(['adb','shell','input','tap',str((x1+x2)//2),str((y1+y2)//2)])
-            PY
-            sleep 12
-            adb shell dumpsys input_method | grep -q 'com.smartfk.keyboard'
-            adb logcat -d -v brief > /tmp/smartfk-logcat.txt
-            if grep -A 12 'FATAL EXCEPTION' /tmp/smartfk-logcat.txt | grep -q 'com.smartfk.keyboard'; then
-              grep -A 25 'FATAL EXCEPTION' /tmp/smartfk-logcat.txt | tail -50
-              exit 1
-            fi
-            echo 'Android 13: app installed, keyboard selected, no SmartFk fatal crash'
+          script: bash scripts/ime-smoke.sh
+      - name: Upload Android emulator screenshot and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartFk-emulator-diagnostics
+          path: /tmp/smartfk-evidence/
+          if-no-files-found: ignore
