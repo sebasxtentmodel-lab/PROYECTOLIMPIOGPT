@@ -40,7 +40,13 @@ for i in $(seq 1 150); do
     echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|AUDIO_TRANSLATED|ASR_TEST_COMPLETE'
     echo "$LOG" | grep -q 'TR_AUDIO_TRANSLATED=' || { echo 'Missing Turkish audio translation'; exit 1; }
     echo "$LOG" | grep -q 'ES_AUDIO_TRANSLATED=' || { echo 'Missing Spanish audio translation'; exit 1; }
-    echo 'PASS: spoken PCM → Vosk ASR → Bergamot NMT works in both directions'
+    # Fail a candidate even if Vosk returns text, when the text is nonsense.
+    # This is a necessary gate, not proof of natural-conversation quality.
+    mkdir -p /tmp/smartfk-evidence
+    printf '%s\n' "$LOG" > /tmp/smartfk-evidence/asr-log.txt
+    python3 scripts/asr_quality_gate.py < /tmp/smartfk-evidence/asr-log.txt \
+      | tee /tmp/smartfk-evidence/quality.json
+    echo 'PASS: spoken PCM → ASR with quality gate → offline NMT'
     break
   fi
   if [ "$i" -eq 150 ]; then
@@ -115,3 +121,11 @@ if grep -A 14 'FATAL EXCEPTION' /tmp/smartfk-evidence/logcat.txt | grep -q 'com.
 fi
 grep -q 'com.smartfk.keyboard' /tmp/smartfk-evidence/input_method.txt
 echo 'PASS: SmartFk installed, registered, enabled, and test field opened without fatal exception'
+cat > /tmp/smartfk-evidence/TESTED_IN_STAGING.txt <<'NOTE'
+Passed in Android 13 x86_64 emulator:
+ - Startup and visible SetupActivity with Google TTS disabled
+ - Keyboard enabled and shown without fatal exception
+ - Offline text and speech translation with synthetic fixtures
+ - Minimum word-recognition quality on scripted Turkish and Spanish audio
+Not tested: physical Infinix device, indefinite microphone use, human speakers/noise.
+NOTE
