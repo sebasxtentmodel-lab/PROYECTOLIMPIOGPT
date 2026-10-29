@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: smartfk-apk-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -37,9 +40,15 @@ jobs:
           cp -a vosk-model-small-es-0.42 "$GITHUB_WORKSPACE/app/src/main/assets/models/es"
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
+      - name: Verify APK contains both local ASR models
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -Z1 app/build/outputs/apk/debug/app-debug.apk | grep -q "^assets/models/tr/final.mdl$"
+          unzip -Z1 app/build/outputs/apk/debug/app-debug.apk | grep -q "^assets/models/es/am/final.mdl$"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartFk-debug-apk
+          name: SmartFk-0.2.0-alpha-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
