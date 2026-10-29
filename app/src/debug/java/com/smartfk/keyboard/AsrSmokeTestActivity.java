@@ -23,8 +23,8 @@ public final class AsrSmokeTestActivity extends Activity {
         new Thread(()->{
             try {
                 // Real voice PCM → Vosk → Bergamot → translated text.
-                testSherpaTurkish();
-                String turkish = testVosk("tr","tr_fixture.pcm");
+                String turkish = testSherpaTurkish();
+                testVosk("tr","tr_fixture.pcm");
                 String spanish = testVosk("es","es_fixture.pcm");
                 if(turkish.trim().isEmpty() || spanish.trim().isEmpty())
                     throw new IllegalStateException("Vosk returned empty voice transcription");
@@ -88,7 +88,7 @@ public final class AsrSmokeTestActivity extends Activity {
             throw new IllegalStateException("Voice → translation failed "+lang+": "+failure.get());
         Log.i(TAG,lang.toUpperCase()+"_AUDIO_TRANSLATED="+translation.get());
     }
-    private void testSherpaTurkish() throws Exception {
+    private String testSherpaTurkish() throws Exception {
         byte[] pcm;
         try (InputStream in=getAssets().open("tr_fixture.pcm")) {
             java.io.ByteArrayOutputStream buf=new java.io.ByteArrayOutputStream();
@@ -105,6 +105,7 @@ public final class AsrSmokeTestActivity extends Activity {
             String text=recognizer.transcribe(samples);
             Log.i(TAG,"TR_SHERPA_RESULT="+text);
             if(text.isEmpty())throw new IllegalStateException("Turkish Sherpa model gave no text");
+            return text;
         }finally {recognizer.close();}
     }
     private void testWhisper(String lang,String fixture) throws Exception {
