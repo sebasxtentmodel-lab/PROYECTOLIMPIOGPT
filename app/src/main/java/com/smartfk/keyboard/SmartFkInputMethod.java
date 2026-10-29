@@ -35,6 +35,8 @@ public final class SmartFkInputMethod extends InputMethodService {
     private OfflineTranslation translate;
     private TextToSpeech tts;
     private boolean ttsReady;
+    private boolean ttsInitializing;
+    private Section pendingSpeech;
     private boolean speaking;
     private String utteranceId = "";
     private final ArrayDeque<String> speechChunks = new ArrayDeque<>();
@@ -53,14 +55,6 @@ public final class SmartFkInputMethod extends InputMethodService {
     @Override public void onCreate() {
         super.onCreate();
         translate = new OfflineTranslation(this);
-        tts = new TextToSpeech(this, status -> {
-            ttsReady = status == TextToSpeech.SUCCESS;
-        });
-        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) {}
-            @Override public void onDone(String id) { completedSpeech(id); }
-            @Override public void onError(String id) { completedSpeech(id); }
-        });
         microphone = new ContinuousVoice(this, new ContinuousVoice.Events() {
             @Override public void status(String state) {
                 ui.post(() -> {
@@ -323,7 +317,45 @@ public final class SmartFkInputMethod extends InputMethodService {
             return;
         }
         Section s=displayedSection(touchY);
-        if (s==null || s.text.length()==0 || !ttsReady) return;
+        if (s==null || s.text.length()==0) return;
+        if (tts==null && !ttsInitializing) {
+            // TTS is optional and must never prevent this keyboard from starting.
+            // Loading it only after a user taps text prevents launch failures
+            // when Android's speech engine is disabled/unavailable.
+            pendingSpeech=s;
+            ttsInitializing=true;
+            try {
+                tts=new TextToSpeech(this,status -> ui.post(() -> {
+                    ttsInitializing=false;
+                    ttsReady=status==TextToSpeech.SUCCESS && tts!=null;
+                    if (ttsReady) {
+                        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                            @Override public void onStart(String id) {}
+                            @Override public void onDone(String id) { completedSpeech(id); }
+                            @Override public void onError(String id) { completedSpeech(id); }
+                        });
+                    }
+                    Section pending=pendingSpeech;
+                    pendingSpeech=null;
+                    if(ttsReady && active && pending!=null) startSpeech(pending);
+                    else if(active && !ttsReady) showDiagnostic(
+                        "La voz de lectura es opcional y no está instalada. La traducción continúa.");
+                }));
+            }catch(Throwable error){
+                ttsInitializing=false;
+                ttsReady=false;
+                pendingSpeech=null;
+                android.util.Log.w("SmartFk","Sistema TTS no disponible",error);
+            }
+            return;
+        }
+        if (ttsInitializing) {pendingSpeech=s;return;}
+        if (!ttsReady) return;
+        startSpeech(s);
+    }
+
+    private void startSpeech(Section s) {
+        if (!ttsReady || tts==null || !active) return;
         Locale lang="tr".equals(s.source) ? new Locale("es","ES") : new Locale("tr","TR");
         if (!selectOfflineVoice(lang)) return;
         speaking=true;
@@ -334,14 +366,18 @@ public final class SmartFkInputMethod extends InputMethodService {
     }
 
     private boolean selectOfflineVoice(Locale locale) {
-        Set<Voice> voices=tts.getVoices();
-        if (voices==null) return false;
-        for (Voice v : voices) {
-            if (!v.isNetworkConnectionRequired() &&
-                v.getLocale()!=null &&
-                locale.getLanguage().equals(v.getLocale().getLanguage())) {
-                return tts.setVoice(v)==TextToSpeech.SUCCESS;
+        try {
+            Set<Voice> voices=tts.getVoices();
+            if (voices==null) return false;
+            for (Voice v : voices) {
+                if (!v.isNetworkConnectionRequired() &&
+                    v.getLocale()!=null &&
+                    locale.getLanguage().equals(v.getLocale().getLanguage())) {
+                    return tts.setVoice(v)==TextToSpeech.SUCCESS;
+                }
             }
+        } catch (Throwable e) {
+            android.util.Log.w("SmartFk","Offline voice not available",e);
         }
         return false;
     }
@@ -490,14 +526,17 @@ public final class SmartFkInputMethod extends InputMethodService {
         active=false; session++; queue.clear(); partialSerial++;
         translationRequestId++; translating=false; current=null;
         speaking=false; utteranceId=""; speechChunks.clear();
-        if (tts!=null) tts.stop();
+        pendingSpeech=null;
+        if (tts!=null) try{tts.stop();}catch(Throwable ignored){}
         microphone.setSpeechPlayback(false);
         microphone.stop();
         super.onFinishInputView(finishingInput);
     }
     @Override public void onDestroy() {
         if (microphone!=null) microphone.stop();
-        if (tts!=null) { tts.stop();tts.shutdown(); }
+        if (tts!=null) {
+            try{tts.stop();tts.shutdown();}catch(Throwable ignored){}
+        }
         if (translate!=null) translate.close();
         super.onDestroy();
     }
