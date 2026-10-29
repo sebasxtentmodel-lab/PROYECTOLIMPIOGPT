@@ -103,7 +103,7 @@ public final class SetupActivity extends Activity {
             "Español → turco"
         };
         String savedMode=getSharedPreferences("smartfk",MODE_PRIVATE)
-            .getString("source_language","auto");
+            .getString("source_language","tr");
         for(int i=0;i<keys.length;i++) {
             final String key=keys[i];
             RadioButton radio=new RadioButton(this);
@@ -213,7 +213,10 @@ public final class SetupActivity extends Activity {
             (current?"\nToca el campo de prueba y empieza a hablar.":"\nHabilita y selecciona SmartFk para comenzar."));
         String error=getSharedPreferences("smartfk",MODE_PRIVATE)
             .getString("last_asr_error","");
-        diagnostics.setText(error.isEmpty()?"":"Último error del micrófono/modelos: "+error);
+        String translationError=getSharedPreferences("smartfk",MODE_PRIVATE)
+            .getString("last_translate_error","");
+        diagnostics.setText((error.isEmpty()?"":"Último error del micrófono/modelos: "+error)
+            +(translationError.isEmpty()?"":"\nÚltimo error de traducción: "+translationError));
     }
 
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results) {
