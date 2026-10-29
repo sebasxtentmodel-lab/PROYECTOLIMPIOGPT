@@ -145,7 +145,7 @@ public final class SmartFkInputMethod extends InputMethodService {
         if (!active || speaking || words.trim().isEmpty()) return;
         partialSerial++;
         final long token=session;
-        if (current != null) current.preview = "";
+        if (current != null) { current.preview = ""; render(current); }
         Section destination=ensureSection(lang);
         queue.add(new Recognition(lang,words,token,destination));
         processQueue();
