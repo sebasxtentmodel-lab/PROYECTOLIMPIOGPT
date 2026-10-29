@@ -1,44 +1,56 @@
-# SmartFk — teclado intérprete Android
+# SmartFk — teclado intérprete Android 100 % local
 
-Proyecto **nuevo** e independiente. No se ha copiado código de las APK antiguas.
+**Tipo de aplicación:** método de entrada Android (`InputMethodService`) sin letras ni teclas físicas. No es un traductor independiente ni una copia de Gboard/WM Keyboard.
 
-## Diseño funcional solicitado
+## Qué hace
 
-- Teclado de Android sin teclas, iconos, botones ni controles propios visibles.
-- Pantalla de texto en formato Rolling por intervenciones; el último bloque se muestra al final.
-- Zona izquierda invisible: tocar reproduce el bloque visible y tocar de nuevo detiene la voz inmediatamente.
-- Zona central invisible: mantener dos segundos para regresar al teclado anterior.
-- Zona derecha invisible: desplazar verticalmente para consultar las traducciones anteriores y recientes.
-- Captura AudioRecord continua mientras el teclado está visible, sin cierre por silencios.
-- Durante la reproducción TTS: micrófono abierto, pero procesamiento ASR suspendido; se reanuda al terminar o detener TTS.
-- Traducción bidireccional turco ↔ español, progresiva y local una vez instalados los modelos.
+- Al activar el teclado, mantiene una sesión de micrófono `AudioRecord` de PCM16 a 16 kHz; las pausas no deben cerrar el micrófono.
+- Reconoce voz turca o española con Vosk; incorpora whisper.cpp multilingüe de apoyo.
+- Traduce localmente mediante **Mozilla Bergamot/Marian NMT** con cuatro modelos integrados y verificados por SHA-256, sin conectar con APIs en la nube.
+- En turco→español utiliza TR→EN→ES; en español→turco, ES→EN→TR.
+- El visor de traducciones solo contiene texto: bloques Rolling por intervención, deslizar para ver anteriores.
+- Toque izquierdo: reproducir TTS bajo demanda o interrumpir la lectura; la captura física continúa, pero el reconocedor evita procesar su propio altavoz.
+- Mantener pulsado el centro durante dos segundos: cambiar de teclado.
+- Zona derecha: desplazamiento por bloques. Ningún botón visual dentro del teclado.
 
-## Alcance real de esta primera versión ALFA
+## Motores realmente integrados
 
-El reconocimiento local utiliza Vosk y los modelos turco/español se incorporan automáticamente **al compilar la APK**. La traducción se realiza en el teléfono con ML Kit **después de una descarga inicial**. Esto significa que la alfa **NO cumple aún el requisito final de funcionar completamente offline desde la primera instalación**. Las voces TTS requieren voces locales compatibles disponibles en Android, que no se incluyen en esta alfa.
+| Capa | Tecnología | Estado |
+|---|---|---|
+| Teclado Android | InputMethodService, interfaz propia | Registrado y probado en Android 13 |
+| Micrófono | AudioRecord PCM16 | Código implementado; falta prueba prolongada en teléfono real |
+| Voz rápida | Vosk + modelos TR y ES | Empaquetados; falta evaluación con voz real |
+| Voz de apoyo | whisper.cpp de WM Keyboard + Tiny multilingüe | Empaquetado; no garantía de latencia mínima |
+| Traducción | Mozilla Bergamot/Marian + 4 modelos | **Comprobada con texto real en ambas direcciones en emulador Android 13** |
+| Lectura | TextToSpeech Android | Requiere voces offline instaladas; se debe probar en dispositivo |
 
-No se ha probado la precisión de la detección automática, la duración de sesiones de horas, la reproducción y el ciclo de vida en un Infinix Smart 8 real. Esta es una entrega de ingeniería inicial, no una versión de producción.
+La aplicación no declara permiso de Internet. **La prueba de traducción de texto es distinta de una prueba de voz en directo.** No declarar completamente funcional el teclado hasta probar ASR→NMT→visor→TTS en el dispositivo.
 
-## Seguridad y privacidad
+## Cómo se diseñó a partir de referencias
 
-- No se envían audios ni conversaciones a un servicio de traducción en la nube.
-- ML Kit puede descargar modelos al iniciar la preparación; esta versión declara INTERNET por ello.
-- No se guarda audio bruto.
-- Los textos se mantienen en memoria hasta terminar el servicio. No existe todavía recuperación de sesiones anteriores.
-- El indicador del micrófono que muestra Android no puede ni debe ocultarse.
+Se han estudiado WM Keyboard (repositorio de código abierto), Firefox Translations, Gboard como referencia de interacción y la función de reuniones de Hi Translate/TexAI como ejemplo conceptual de continuidad. Se reutiliza únicamente tecnología con licencia compatible o APIs de Android. No se ha extraído código cerrado, motores de nube ni supuestas APIs privadas de Hi Translate.
 
-## Compilación automática
+**Análisis del video y la imagen aportados el 29/10/2026:**
+[docs/ANALISIS_HI_TRANSLATE_Y_MOTORES.md](docs/ANALISIS_HI_TRANSLATE_Y_MOTORES.md)
 
-En GitHub > Actions > «SmartFk Android APK», descargar el artefacto `SmartFk-debug-apk` cuando la compilación haya terminado correctamente. Dentro se encuentra `app-debug.apk`.
+La captura afirma que Hi Translate utiliza Google Cloud, Azure y DeepSeek, pero no existe verificación técnica suficiente de esos proveedores. La arquitectura de SmartFk seguirá siendo offline, sin grabación de llamadas ni uso de servicios cloud. AudioPlaybackCapture necesita permiso explícito de MediaProjection y está restringida a audio que permita su captura: no confundirlo con Accessibility.
 
-La acción instala Java y Gradle, descarga modelos Vosk oficiales y compila el APK con el Android SDK de GitHub Actions.
+## Consideraciones de memoria y precisión
 
-## Próximos requisitos pendientes
+En el Infinix Smart 8 (Android 13, memoria física cercana a 4 GB), no ejecutar varios modelos grandes en paralelo sin medirlo. Bergamot mantiene solo la ruta NMT activa (dos modelos) y Whisper debe funcionar como apoyo, no bloquear el hilo de audio. El modelo multilingüe Tiny sacrifica precisión frente a modelos grandes; no prometer precisión perfecta ni «infinito» sin pruebas.
 
-1. Incorporar un motor **neuronal independiente con modelos de traducción incluidos desde la instalación**, reemplazando la dependencia de descarga inicial de ML Kit.
-2. Integrar voces TTS locales dentro del paquete, no depender de paquetes instalados externamente.
-3. Mejorar la clasificación automática turco/español mediante un detector ligero y pruebas de reconocimiento.
-4. Probar interrupciones del audio, latencia y consumo de RAM durante sesiones largas.
-5. Pruebas de integración en un dispositivo Android 13 real.
+## Compilación
 
-El código es nuevo; las bibliotecas de terceros y sus modelos mantienen sus respectivas licencias.
+GitHub Actions `SmartFk Android APK`: descarga y verifica los modelos Vosk, los binarios de WM Keyboard, los modelos Mozilla Bergamot y Whisper; compila la APK y prueba su registro como teclado. La prueba del traductor ejecuta frases en ambas direcciones en un emulador Android 13.
+
+**Bibliotecas y derechos:** ver [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Siguientes pruebas obligatorias
+
+1. Probar voz turca natural→español y voz española→turco sin acceso a Internet.
+2. Verificar que el micrófono no se reinicia por silencios; segmentar por turnos sin cortar el flujo.
+3. Medir latencia parcial/final, deduplicación Vosk/Whisper y consumo RAM/CPU.
+4. Comprobar TTS, cancelación y reanudación automática.
+5. Realizar una prueba real de 30–60 minutos con cambios de aplicación y pantalla encendida.
+
+No se agregará un modo de grabación de otras aplicaciones ni un servicio persistente con pantalla apagada sin autorización y requisitos específicos.
