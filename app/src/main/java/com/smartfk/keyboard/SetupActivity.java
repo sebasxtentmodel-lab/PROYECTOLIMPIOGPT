@@ -55,7 +55,7 @@ public final class SetupActivity extends Activity {
             "2. Activa SmartFk como teclado Android.\n" +
             "3. Selecciona SmartFk.\n" +
             "4. Toca el campo de prueba de abajo para abrirlo.\n\n" +
-            "La traducción de esta alfa requiere descargar los modelos ML Kit una sola vez.",
+            "La traducción neuronal Bergamot y el modelo de voz Whisper vienen dentro de la APK. No es necesario Internet.",
             15));
         status = label("",16);
         root.addView(status);
@@ -122,9 +122,9 @@ public final class SetupActivity extends Activity {
         }
         root.addView(choice);
 
-        modelsStatus=label("Traducción ML Kit: no comprobada en esta apertura.",15);
+        modelsStatus=label("Traducción Bergamot: no comprobada en esta apertura.",15);
         root.addView(modelsStatus);
-        Button prepare=button(root,"VERIFICAR / DESCARGAR MODELOS DE TRADUCCIÓN");
+        Button prepare=button(root,"COMPROBAR MODELOS NEURONALES OFFLINE");
         prepare.setOnClickListener(v -> {
             prepare.setEnabled(false);
             turkishReady=false;
@@ -134,8 +134,8 @@ public final class SetupActivity extends Activity {
                 if (!turkishReady || !spanishReady) {
                     prepare.setEnabled(true);
                     modelsStatus.setText("La preparación sigue pendiente. " +
-                        "ML Kit necesita descargar modelos inicialmente; " +
-                        "comprueba conexión de datos, espacio y servicios Google. " +
+                        "" +
+                        "" +
                         "Turco → español: " + (turkishReady?"LISTO":"PENDIENTE") +
                         "\nEspañol → turco: " + (spanishReady?"LISTO":"PENDIENTE"));
                 }
@@ -158,7 +158,7 @@ public final class SetupActivity extends Activity {
             });
         });
 
-        Button translateTest=button(root,"PROBAR TRADUCTOR LOCAL SIN MICRÓFONO");
+        Button translateTest=button(root,"PROBAR TRADUCTOR NEURONAL OFFLINE");
         translateTest.setOnClickListener(v -> {
             if (models==null) models=new OfflineTranslation(this);
             modelsStatus.setText("Probando traducción neuronal con texto turco conocido…");
