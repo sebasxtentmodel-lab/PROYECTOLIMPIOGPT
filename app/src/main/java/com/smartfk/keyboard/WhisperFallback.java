@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.LongSupplier;
 
 /** AudioRecord runs independently of Whisper; decoding never blocks capture. */
 final class WhisperFallback {
@@ -22,14 +23,17 @@ final class WhisperFallback {
     });
     private final short[] window=new short[WINDOW];
     private final String configuredSource;
+    private final LongSupplier latestVoskResult;
     private int used;
     private volatile boolean closed, decoding;
     private long modelHandle;
 
-    WhisperFallback(Context context,ContinuousVoice.Events events,String configuredSource) {
+    WhisperFallback(Context context,ContinuousVoice.Events events,String configuredSource,
+                    LongSupplier latestVoskResult) {
         this.context=context;
         this.events=events;
         this.configuredSource=configuredSource;
+        this.latestVoskResult=latestVoskResult;
     }
     void feed(short[] audio,int count,long lastVoskAt) {
         if(closed)return;
@@ -44,7 +48,7 @@ final class WhisperFallback {
                 long now=SystemClock.elapsedRealtime();
                 if(!decoding && (lastVoskAt==0 || now-lastVoskAt>4200) && audible(candidate)) {
                     decoding=true;
-                    decoder.execute(()->transcribe(candidate));
+                    decoder.execute(()->transcribe(candidate,lastVoskAt));
                 }
             }
         }
@@ -54,7 +58,7 @@ final class WhisperFallback {
         for(int i=0;i<audio.length;i+=8)sum+=Math.abs((int)audio[i]);
         return sum/(audio.length/8)>65;
     }
-    private void transcribe(short[] pcm) {
+    private void transcribe(short[] pcm,long voskSnapshot) {
         try {
             if(closed)return;
             if(modelHandle==0) {
@@ -84,6 +88,9 @@ final class WhisperFallback {
             String src="es".equals(actual)?"es":"tr".equals(actual)?"tr":configuredSource;
             if(("tr".equals(src)||"es".equals(src))&&!words.isEmpty()
                     && !words.matches("(?i).*\\[(music|noise|silence)\\].*")) {
+                // Vosk may recognize the same utterance while Whisper is decoding.
+                // Do not append a second translation for the already-recognized speech.
+                if (latestVoskResult.getAsLong() > voskSnapshot) return;
                 events.finalWords(src,words);
             }
         } catch (Throwable ex) {
