@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 concurrency:
-  group: smartfk-apk-${{ github.ref }}
+  group: smartfk-build-${{ github.sha }}
   cancel-in-progress: true
 permissions:
   contents: read
