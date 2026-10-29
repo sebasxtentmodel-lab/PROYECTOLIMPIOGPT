@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 concurrency:
-  group: smartfk-build-${{ github.ref }}
+  group: smartfk-neural-${{ github.ref }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -27,36 +27,41 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Download verified Vosk assets from earlier SmartFk build
+      - name: Reuse official Vosk Turkish and Spanish models
         uses: actions/download-artifact@v4
         with:
           name: SmartFk-debug-apk
           run-id: 40838866923
           github-token: ${{ github.token }}
           path: /tmp/smartfk-prev
-      - name: Bundle official Turkish and Spanish Vosk models
+      - name: Install official Vosk ASR models
         shell: bash
         run: |
           set -euo pipefail
           unzip -qq /tmp/smartfk-prev/app-debug.apk 'assets/models/*' -d /tmp/smartfk-unpack
           mkdir -p app/src/main/assets/models
           cp -a /tmp/smartfk-unpack/assets/models/. app/src/main/assets/models/
-      - name: Bundle real neural translation and Whisper models (SHA-256 verified)
+      - name: Bundle and verify real Mozilla neural models and WM native engines
         run: |
           python3 -m pip install --quiet zstandard
           python3 scripts/bundle_neural_models.py
-      - name: Build debug APK
+      - name: Build offline Android APK
         run: gradle --no-daemon :app:assembleDebug
-      - name: Verify APK contains both local ASR models
+      - name: Verify complete ASR and neural assets in APK
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          unzip -Z1 app/build/outputs/apk/debug/app-debug.apk | grep -q "^assets/models/tr/final.mdl$"
-          unzip -Z1 app/build/outputs/apk/debug/app-debug.apk | grep -q "^assets/models/es/am/final.mdl$"
-          sha256sum app/build/outputs/apk/debug/app-debug.apk
-      - name: Verify real offline neural engines and model files are packaged
-        run: |
+          set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
-          unzip -Z1 "$APK" | grep -q '^assets/bergamot/tr-en/model.bin
+          test -s "$APK"
+          unzip -Z1 "$APK" > /tmp/apk-entries.txt
+          for asset in assets/models/tr/final.mdl assets/models/es/am/final.mdl \
+                       assets/bergamot/tr-en/model.bin assets/bergamot/en-es/model.bin \
+                       assets/bergamot/es-en/model.bin assets/bergamot/en-tr/model.bin \
+                       assets/whisper/ggml-tiny-q5_1.bin \
+                       lib/arm64-v8a/libwmbergamot.so lib/arm64-v8a/libwmwhispercpp.so; do
+            grep -Fxq "$asset" /tmp/apk-entries.txt || { echo "Missing $asset"; exit 1; }
+          done
+          sha256sum "$APK"
+      - name: Publish SmartFk APK
         uses: actions/upload-artifact@v4
         with:
           name: SmartFk-0.7.0-neural-offline-apk
@@ -64,10 +69,10 @@ jobs:
           if-no-files-found: error
 
   emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
+    name: Android 13 keyboard and neural translator smoke test
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +85,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
+      - name: Test on Android 13
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
@@ -88,291 +93,10 @@ jobs:
           arch: x86_64
           profile: pixel_2
           script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
+      - name: Save diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^assets/bergamot/en-es/model.bin
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^assets/bergamot/es-en/model.bin
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^assets/bergamot/en-tr/model.bin
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^assets/whisper/ggml-tiny-q5_1.bin
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^lib/arm64-v8a/libwmbergamot.so
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          unzip -Z1 "$APK" | grep -q '^lib/arm64-v8a/libwmwhispercpp.so
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
-          path: /tmp/smartfk-evidence/
-          if-no-files-found: ignore
-
-          echo "All neural models and native engines are inside the installable APK."
-      - name: Publish installable APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  emulator-smoke:
-    name: Test keyboard opening on Android 13 emulator
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-0.7.0-neural-offline-apk
-          path: /tmp/apk
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Start Android emulator and test IME activation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          script: bash scripts/ime-smoke.sh
-      - name: Upload Android emulator screenshot and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartFk-emulator-diagnostics
+          name: SmartFk-neural-emulator-diagnostics
           path: /tmp/smartfk-evidence/
           if-no-files-found: ignore
