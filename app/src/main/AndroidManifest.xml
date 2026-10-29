@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- ML Kit models need an initial download: current alpha is NOT first-install offline. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="true"/>
+    <application android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:label="SmartFk" android:icon="@drawable/ic_launcher"
+        android:usesCleartextTraffic="false" android:allowBackup="false">
+        <activity android:name=".SetupActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <service android:name=".SmartFkInputMethod" android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD" android:label="SmartFk">
+            <intent-filter>
+                <action android:name="android.view.InputMethod"/>
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method"/>
+        </service>
+    </application>
+</manifest>
