@@ -5,6 +5,28 @@ APK=/tmp/apk/app-debug.apk
 test -s "$APK"
 adb install -r "$APK"
 adb shell pm grant com.smartfk.keyboard android.permission.RECORD_AUDIO
+
+echo 'Testing actual Mozilla neural inference with installed model files...'
+adb logcat -c
+adb shell am start -n com.smartfk.keyboard/.NeuralSmokeTestActivity
+for i in $(seq 1 75); do
+  LOG=$(adb logcat -d -s SMARTFK_NEURAL_TEST:I '*:S' || true)
+  if echo "$LOG" | grep -q 'TR_ES_FAILED\|ES_TR_FAILED'; then
+    echo "$LOG"
+    exit 1
+  fi
+  if echo "$LOG" | grep -q 'TR_ES_OK:' && echo "$LOG" | grep -q 'ES_TR_OK:'; then
+    echo "$LOG"
+    echo "PASS: translated Turkish → Spanish and Spanish → Turkish entirely offline."
+    break
+  fi
+  if [ "$i" -eq 75 ]; then
+    echo "$LOG"
+    echo "ERROR: no successful neural translation after Android runtime test."
+    exit 1
+  fi
+  sleep 2
+done
 adb shell am start -n com.smartfk.keyboard/.SetupActivity
 sleep 3
 
