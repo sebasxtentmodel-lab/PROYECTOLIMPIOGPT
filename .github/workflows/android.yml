@@ -160,3 +160,89 @@ jobs:
           name: SmartFk-neural-emulator-diagnostics
           path: /tmp/smartfk-evidence/
           if-no-files-found: ignore
+
+  qa-promotion:
+    name: QA · Promote only after all staging tests pass
+    needs: [build, emulator-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download the exact tested APK
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartFk-0.11.0-STAGING-apk
+          path: /tmp/verified
+      - name: Download mandatory test evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartFk-neural-emulator-diagnostics
+          path: /tmp/evidence
+      - name: Gate on actual speech quality and runtime success
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s /tmp/verified/app-debug.apk
+          test -s /tmp/evidence/TESTED_IN_STAGING.txt
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/evidence/quality.json'))
+          assert d['status']=='PASS', 'Turkish or Spanish ASR failed quality gate'
+          for lang in ('TR','ES'):
+              assert d['languages'][lang]['passed'], f'{lang} speech recognition is inaccurate'
+          print('PASS: independently verified speech quality')
+          PY
+          unzip -tq /tmp/verified/app-debug.apk
+          sha256sum /tmp/verified/app-debug.apk > /tmp/verified/SHA256.txt
+          cp /tmp/evidence/TESTED_IN_STAGING.txt /tmp/verified/QA_SCOPE.txt
+          cp /tmp/evidence/quality.json /tmp/verified/ASR_QUALITY.json
+      - name: Publish verified staging APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartFk-0.11.0-QA-VERIFIED-APK
+          path: /tmp/verified/
+          if-no-files-found: error
+
+  production:
+    name: PRODUCTION · Sign gated APK with private keystore
+    needs: qa-promotion
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartFk-0.11.0-UNSIGNED-release
+          path: /tmp/release
+      - name: Sign using repository-owned protected secrets
+        shell: bash
+        env:
+          SMARTFK_KEYSTORE_B64: ${{ secrets.SMARTFK_KEYSTORE_B64 }}
+          SMARTFK_KEYSTORE_PASSWORD: ${{ secrets.SMARTFK_KEYSTORE_PASSWORD }}
+          SMARTFK_KEY_ALIAS: ${{ secrets.SMARTFK_KEY_ALIAS }}
+          SMARTFK_KEY_PASSWORD: ${{ secrets.SMARTFK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$SMARTFK_KEYSTORE_B64" || { echo "Missing protected production keystore secret"; exit 1; }
+          test -n "$SMARTFK_KEYSTORE_PASSWORD" || exit 1
+          test -n "$SMARTFK_KEY_ALIAS" || exit 1
+          export SMARTFK_KEY_PASSWORD="${SMARTFK_KEY_PASSWORD:-$SMARTFK_KEYSTORE_PASSWORD}"
+          umask 077
+          printf '%s' "$SMARTFK_KEYSTORE_B64" | base64 -d > /tmp/release/signing.jks
+          BT=$(find /usr/local/lib/android/sdk/build-tools -type f -name apksigner | sort -V | tail -n1)
+          TOOLS=$(dirname "$BT")
+          "$TOOLS/zipalign" -f -p 4 /tmp/release/app-release-unsigned.apk /tmp/release/SmartFk-aligned.apk
+          "$BT" sign --ks /tmp/release/signing.jks --ks-key-alias "$SMARTFK_KEY_ALIAS" \
+            --ks-pass env:SMARTFK_KEYSTORE_PASSWORD --key-pass env:SMARTFK_KEY_PASSWORD \
+            --out /tmp/release/SmartFk-PRODUCTION.apk /tmp/release/SmartFk-aligned.apk
+          "$BT" verify --verbose /tmp/release/SmartFk-PRODUCTION.apk
+          sha256sum /tmp/release/SmartFk-PRODUCTION.apk > /tmp/release/SHA256.txt
+          rm -f /tmp/release/signing.jks /tmp/release/SmartFk-aligned.apk /tmp/release/app-release-unsigned.apk
+      - name: Publish signed production APK only after validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartFk-0.11.0-PRODUCTION-SIGNED
+          path: |
+            /tmp/release/SmartFk-PRODUCTION.apk
+            /tmp/release/SHA256.txt
+          if-no-files-found: error
