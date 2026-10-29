@@ -2,6 +2,7 @@ package com.smartfk.keyboard;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.text.InputType;
 import android.inputmethodservice.InputMethodService;
 import android.os.Handler;
 import android.os.Looper;
@@ -159,7 +160,25 @@ public final class SmartFkInputMethod extends InputMethodService {
         getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
             .remove("last_asr_error").remove("last_translate_error")
             .remove("last_asr_text").apply();
-        microphone.start();
+        if(isSensitiveField(info)){
+            // Never open the microphone for password, PIN, or private input.
+            showDiagnostic("SmartFk no escucha en campos de contraseña o PIN.");
+        } else {
+            microphone.start();
+        }
+    }
+
+    private static boolean isSensitiveField(android.view.inputmethod.EditorInfo info){
+        if(info==null)return false;
+        int category=info.inputType & InputType.TYPE_MASK_CLASS;
+        int variation=info.inputType & InputType.TYPE_MASK_VARIATION;
+        if(category==InputType.TYPE_CLASS_TEXT){
+            return variation==InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                variation==InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                variation==InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD;
+        }
+        return category==InputType.TYPE_CLASS_NUMBER &&
+            variation==InputType.TYPE_NUMBER_VARIATION_PASSWORD;
     }
 
     private void acceptPartial(String lang,String words) {
