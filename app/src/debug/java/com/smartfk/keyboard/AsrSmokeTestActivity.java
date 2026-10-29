@@ -22,8 +22,18 @@ public final class AsrSmokeTestActivity extends Activity {
         super.onCreate(state);
         new Thread(()->{
             try {
-                testVosk("tr","tr_fixture.pcm");
-                testVosk("es","es_fixture.pcm");
+                // Real voice PCM → Vosk → Bergamot → translated text.
+                String turkish = testVosk("tr","tr_fixture.pcm");
+                String spanish = testVosk("es","es_fixture.pcm");
+                if(turkish.trim().isEmpty() || spanish.trim().isEmpty())
+                    throw new IllegalStateException("Vosk returned empty voice transcription");
+                OfflineTranslation nmt=new OfflineTranslation(this);
+                try {
+                    testTranslation("tr",turkish,nmt);
+                    testTranslation("es",spanish,nmt);
+                } finally {
+                    nmt.close();
+                }
                 testWhisper("tr","tr_fixture.pcm");
                 testWhisper("es","es_fixture.pcm");
                 Log.i(TAG,"ASR_TEST_COMPLETE");
@@ -32,7 +42,7 @@ public final class AsrSmokeTestActivity extends Activity {
             }
         },"smartfk-asr-test").start();
     }
-    private void testVosk(String lang,String fixture) throws Exception {
+    private String testVosk(String lang,String fixture) throws Exception {
         File model=new File(getCacheDir(),"models-"+lang);
         if(!model.exists()) model.mkdirs();
         copyDirectory("models/"+lang,model);
@@ -52,6 +62,30 @@ public final class AsrSmokeTestActivity extends Activity {
             if(!tail.isEmpty()) recognized.append(tail);
         }
         Log.i(TAG,lang.toUpperCase()+"_VOSK_RESULT="+recognized.toString().trim());
+        return recognized.toString().trim();
+    }
+    private void testTranslation(String lang,String recognized,OfflineTranslation engine)
+            throws Exception {
+        java.util.concurrent.CountDownLatch latch=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<String> translation=
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> failure=
+            new java.util.concurrent.atomic.AtomicReference<>();
+        engine.translate(lang,recognized,new OfflineTranslation.Callback() {
+            @Override public void onSuccess(String value) {
+                translation.set(value);
+                latch.countDown();
+            }
+            @Override public void onFailure(String reason) {
+                failure.set(reason);
+                latch.countDown();
+            }
+        });
+        if(!latch.await(100,java.util.concurrent.TimeUnit.SECONDS))
+            throw new IllegalStateException("Timeout voice → neural translation ("+lang+")");
+        if(failure.get()!=null || translation.get()==null || translation.get().trim().isEmpty())
+            throw new IllegalStateException("Voice → translation failed "+lang+": "+failure.get());
+        Log.i(TAG,lang.toUpperCase()+"_AUDIO_TRANSLATED="+translation.get());
     }
     private void testWhisper(String lang,String fixture) throws Exception {
         File path=new File(getCacheDir(),"ggml-tiny-q5_1.bin");
