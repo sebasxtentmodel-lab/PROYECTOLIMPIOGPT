@@ -37,7 +37,7 @@ for i in $(seq 1 150); do
     exit 1
   fi
   if echo "$LOG" | grep -q 'ASR_TEST_COMPLETE'; then
-    echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|AUDIO_TRANSLATED|ASR_TEST_COMPLETE'
+    echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|SHERPA_RESULT|AUDIO_TRANSLATED|ASR_TEST_COMPLETE'
     echo "$LOG" | grep -q 'TR_AUDIO_TRANSLATED=' || { echo 'Missing Turkish audio translation'; exit 1; }
     echo "$LOG" | grep -q 'ES_AUDIO_TRANSLATED=' || { echo 'Missing Spanish audio translation'; exit 1; }
     # Fail a candidate even if Vosk returns text, when the text is nonsense.
