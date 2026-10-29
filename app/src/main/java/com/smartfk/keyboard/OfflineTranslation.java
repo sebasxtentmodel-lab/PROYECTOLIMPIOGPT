@@ -27,6 +27,17 @@ final class OfflineTranslation {
     private String loadedRoute="";
     private volatile boolean closed;
     private volatile boolean libraryOk;
+    // At most one unfinished preview is queued. Every newer hypothesis replaces it.
+    private Preview latestPreview;
+    private boolean previewScheduled;
+    private static final class Preview {
+        final String source,phrase;
+        final Callback callback;
+        Preview(String source,String phrase,Callback callback) {
+            this.source=source;this.phrase=phrase;this.callback=callback;
+        }
+    }
+
 
     OfflineTranslation(Context context) {
         app=context.getApplicationContext();
@@ -53,22 +64,52 @@ final class OfflineTranslation {
         });
     }
     void translate(String source,String phrase,Callback cb) {
-        if(phrase==null || phrase.trim().isEmpty())return;
-        if(!libraryOk) { error(cb,"Falta biblioteca nativa Bergamot");return; }
-        final String requested="es".equals(source)?"es":"tr";
+        if (phrase==null || phrase.trim().isEmpty()) return;
+        if (!libraryOk) { error(cb,"Falta biblioteca nativa Bergamot");return; }
         worker.execute(()->{
             if(closed)return;
-            try{
-                setup(requested);
-                byte[][] input={phrase.getBytes(StandardCharsets.UTF_8)};
-                byte[][] result=BergamotNative.nativePivot(service,first,second,input);
-                if(result==null||result.length==0||result[0]==null)
-                    throw new IllegalStateException("Bergamot devolvió resultado vacío");
-                String out=new String(result[0],StandardCharsets.UTF_8).trim();
-                if(out.isEmpty())throw new IllegalStateException("Modelo sin salida");
-                ok(cb,out);
-            }catch(Throwable e){error(cb,describe(e));}
+            try { ok(cb,translateNow(source,phrase)); }
+            catch(Throwable e){error(cb,describe(e));}
         });
+    }
+
+    /**
+     * Live ASR sends new hypotheses several times per second. Never queue one
+     * expensive neural inference for every hypothesis: it can delay definitive
+     * sentences indefinitely. Only the newest waiting preview is retained.
+     * Final translations use translate() and are queued ahead of later previews.
+     */
+    synchronized void translatePreview(String source,String phrase,Callback cb) {
+        if(closed || phrase==null || phrase.trim().isEmpty())return;
+        if(!libraryOk) {error(cb,"Falta biblioteca nativa Bergamot");return;}
+        latestPreview=new Preview(source,phrase,cb);
+        if(previewScheduled)return;
+        previewScheduled=true;
+        worker.execute(this::drainOnePreview);
+    }
+
+    private void drainOnePreview() {
+        Preview item;
+        synchronized(this){ item=latestPreview;latestPreview=null; }
+        if(item!=null && !closed) {
+            try {ok(item.callback,translateNow(item.source,item.phrase));}
+            catch(Throwable e){error(item.callback,describe(e));}
+        }
+        synchronized(this) {
+            if(latestPreview!=null && !closed) worker.execute(this::drainOnePreview);
+            else previewScheduled=false;
+        }
+    }
+
+    private String translateNow(String source,String phrase) throws Exception {
+        setup("es".equals(source)?"es":"tr");
+        byte[][] inputs={phrase.getBytes(StandardCharsets.UTF_8)};
+        byte[][] result=BergamotNative.nativePivot(service,first,second,inputs);
+        if(result==null || result.length==0 || result[0]==null)
+            throw new IllegalStateException("Bergamot devolvió resultado vacío");
+        String translated=new String(result[0],StandardCharsets.UTF_8).trim();
+        if(translated.isEmpty())throw new IllegalStateException("Modelo sin salida");
+        return translated;
     }
     private void setup(String source) throws Exception {
         if(source.equals(loadedRoute)&&first!=0&&second!=0)return;
