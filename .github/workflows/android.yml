@@ -8,6 +8,7 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: read
+  actions: read
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,18 +27,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Bundle small offline speech recognition models
+      - name: Download verified Vosk assets from earlier SmartFk build
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartFk-debug-apk
+          run-id: 40838866923
+          github-token: ${{ github.token }}
+          path: /tmp/smartfk-prev
+      - name: Bundle official Turkish and Spanish Vosk models
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p app/src/main/assets/models /tmp/smartfk-asr
-          cd /tmp/smartfk-asr
-          for name in vosk-model-small-tr-0.3 vosk-model-small-es-0.42; do
-            curl -fsSL --retry 3 --retry-delay 3 "https://alphacephei.com/vosk/models/${name}.zip" -o "${name}.zip"
-            unzip -q "${name}.zip"
-          done
-          cp -a vosk-model-small-tr-0.3 "$GITHUB_WORKSPACE/app/src/main/assets/models/tr"
-          cp -a vosk-model-small-es-0.42 "$GITHUB_WORKSPACE/app/src/main/assets/models/es"
+          unzip -qq /tmp/smartfk-prev/app-debug.apk 'assets/models/*' -d /tmp/smartfk-unpack
+          mkdir -p app/src/main/assets/models
+          cp -a /tmp/smartfk-unpack/assets/models/. app/src/main/assets/models/
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
       - name: Verify APK contains both local ASR models
