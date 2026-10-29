@@ -37,7 +37,10 @@ for i in $(seq 1 150); do
     exit 1
   fi
   if echo "$LOG" | grep -q 'ASR_TEST_COMPLETE'; then
-    echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|ASR_TEST_COMPLETE'
+    echo "$LOG" | grep -E 'VOSK_RESULT|WHISPER_RESULT|AUDIO_TRANSLATED|ASR_TEST_COMPLETE'
+    echo "$LOG" | grep -q 'TR_AUDIO_TRANSLATED=' || { echo 'Missing Turkish audio translation'; exit 1; }
+    echo "$LOG" | grep -q 'ES_AUDIO_TRANSLATED=' || { echo 'Missing Spanish audio translation'; exit 1; }
+    echo 'PASS: spoken PCM → Vosk ASR → Bergamot NMT works in both directions'
     break
   fi
   if [ "$i" -eq 150 ]; then
