@@ -73,6 +73,57 @@ jobs:
             grep -Fxq "$asset" /tmp/apk-entries.txt || { echo "Missing $asset"; exit 1; }
           done
           sha256sum "$APK"
+      - name: Package complete standalone Android Studio source project with offline models
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Include Gradle Wrapper so Android Studio can open and compile directly.
+          gradle --no-daemon wrapper --gradle-version 8.10.2 --distribution-type bin
+          chmod +x gradlew
+          STAGE=/tmp/smartfk-source-export/PROYECTOLIMPIOGPT
+          mkdir -p "$STAGE"
+          rsync -a \
+            --exclude=.git \
+            --exclude=.gradle \
+            --exclude=.idea \
+            --exclude=build \
+            --exclude=build-model-cache \
+            --exclude='app/build' \
+            --exclude='local.properties' \
+            ./ "$STAGE/"
+          cat > "$STAGE/LEEME_COMPILAR.txt" <<'INSTRUCTIONS'
+          PROYECTOLIMPIOGPT - SmartFk 0.8 - CODIGO COMPLETO
+          
+          Incluye:
+           * Proyecto Android Studio, codigo Java, Gradle y Gradle Wrapper
+           * Motores nativos WM Keyboard whisper.cpp y Bergamot
+           * Modelos offline Vosk en espanol y turco
+           * Modelo Whisper multilingue
+           * Modelos neuronales Mozilla para TR-EN-ES y ES-EN-TR
+           * Scripts de compilacion, diagnosticos y pruebas
+          
+          Para compilar en Android Studio: abrir esta carpeta como proyecto
+          y ejecutar la tarea ':app:assembleDebug'. Necesita JDK 17 y Android SDK 35.
+          Los motores/modelos ya vienen dentro de este ZIP, sin descargas adicionales
+          de datos de IA; Gradle puede descargar dependencias de compilacion.
+          La APK instalable se distribuye por separado.
+          
+          IMPORTANTE: no se ha validado el reconocimiento continuo real en
+          un Infinix Smart 8. La compilacion y tests Android 13 no garantizan
+          la precision de conversacion en ese telefono.
+          INSTRUCTIONS
+          cd /tmp/smartfk-source-export
+          zip -q -r /tmp/PROYECTOLIMPIOGPT_SmartFk_0.8_COMPLETO.zip PROYECTOLIMPIOGPT
+          unzip -tq /tmp/PROYECTOLIMPIOGPT_SmartFk_0.8_COMPLETO.zip
+          ls -lh /tmp/PROYECTOLIMPIOGPT_SmartFk_0.8_COMPLETO.zip
+          sha256sum /tmp/PROYECTOLIMPIOGPT_SmartFk_0.8_COMPLETO.zip
+      - name: Publish complete editable SmartFk project ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PROYECTOLIMPIOGPT-SmartFk-0.8-FULL-PROJECT-ZIP
+          path: /tmp/PROYECTOLIMPIOGPT_SmartFk_0.8_COMPLETO.zip
+          if-no-files-found: error
+          compression-level: 0
       - name: Publish SmartFk APK
         uses: actions/upload-artifact@v4
         with:
