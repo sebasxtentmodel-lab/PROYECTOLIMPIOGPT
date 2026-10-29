@@ -3,5 +3,7 @@
   <application>
     <activity android:name="com.smartfk.keyboard.NeuralSmokeTestActivity"
       android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
+    <activity android:name="com.smartfk.keyboard.AsrSmokeTestActivity"
+      android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
   </application>
 </manifest>
