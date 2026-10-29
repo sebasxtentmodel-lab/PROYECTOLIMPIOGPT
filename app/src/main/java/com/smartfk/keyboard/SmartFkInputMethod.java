@@ -30,6 +30,7 @@ public final class SmartFkInputMethod extends InputMethodService {
     private FrameLayout panel;
     private ScrollView scroller;
     private LinearLayout history;
+    private TextView diagnostic;
     private ContinuousVoice microphone;
     private OfflineTranslation translate;
     private TextToSpeech tts;
@@ -60,6 +61,9 @@ public final class SmartFkInputMethod extends InputMethodService {
             @Override public void onError(String id) { completedSpeech(id); }
         });
         microphone = new ContinuousVoice(this, new ContinuousVoice.Events() {
+            @Override public void status(String state) {
+                ui.post(() -> showDiagnostic(state));
+            }
             @Override public void partial(String lang, String words) {
                 ui.post(() -> acceptPartial(lang,words));
             }
@@ -69,15 +73,17 @@ public final class SmartFkInputMethod extends InputMethodService {
             @Override public void error(String detail) {
                 // Setup activity is responsible for diagnostics, keeping the IME text-only.
                 android.util.Log.e("SmartFk", detail);
+                ui.post(() -> showDiagnostic("Error de audio: " + detail
+                    + ". Comprueba el estado en la aplicación SmartFk."));
                 getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit().putString("last_asr_error",detail).apply();
             }
         });
     }
 
     @Override public View onCreateInputView() {
-        panel = new FrameLayout(this);
+        panel = new FixedHeightPanel(this,dp(PANEL_DP));
         panel.setBackgroundColor(Color.rgb(16,16,16));
-        panel.setLayoutParams(new ViewGroup.LayoutParams(-1, dp(PANEL_DP)));
+        panel.setLayoutParams(new ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT));
         scroller = new ScrollView(this);
         scroller.setBackgroundColor(Color.TRANSPARENT);
         scroller.setFillViewport(true);
@@ -86,12 +92,18 @@ public final class SmartFkInputMethod extends InputMethodService {
         history = new LinearLayout(this);
         history.setOrientation(LinearLayout.VERTICAL);
         history.setPadding(dp(5),dp(7),dp(5),dp(6));
+        diagnostic = new TextView(this);
+        diagnostic.setTextColor(0xFFDDDDDD);
+        diagnostic.setTextSize(15);
+        diagnostic.setPadding(dp(6),dp(5),dp(6),dp(5));
+        diagnostic.setVisibility(View.GONE);
+        history.addView(diagnostic, new LinearLayout.LayoutParams(-1,-2));
         scroller.addView(history,new ScrollView.LayoutParams(-1,-2));
         panel.addView(scroller,new FrameLayout.LayoutParams(-1,dp(PANEL_DP)));
         View touchSurface = new View(this);
         touchSurface.setBackgroundColor(Color.TRANSPARENT);
         touchSurface.setOnTouchListener(new ThreeZoneGestures());
-        panel.addView(touchSurface,new FrameLayout.LayoutParams(-1,-1));
+        panel.addView(touchSurface,new FrameLayout.LayoutParams(-1,dp(PANEL_DP)));
         for (Section s : sections) { s.view = null; drawSection(s); }
         return panel;
     }
@@ -99,6 +111,7 @@ public final class SmartFkInputMethod extends InputMethodService {
     @Override public void onStartInputView(android.view.inputmethod.EditorInfo info, boolean restarting) {
         super.onStartInputView(info,restarting);
         active = true;
+        showDiagnostic("Preparando reconocimiento y traducción local…");
         session++;
         // No unconfirmed words or in-flight translations may leak across IME sessions.
         queue.clear();
@@ -111,10 +124,13 @@ public final class SmartFkInputMethod extends InputMethodService {
         final long token = session;
         translate.prepare(new OfflineTranslation.Callback() {
             @Override public void onSuccess(String text) {
-                if (active && session==token) android.util.Log.i("SmartFk",text);
+                if (active && session==token) {
+                    android.util.Log.i("SmartFk",text);
+                }
             }
             @Override public void onFailure(String err) {
                 android.util.Log.e("SmartFk",err);
+                ui.post(() -> showDiagnostic("Error al preparar traducción: " + err));
             }
         });
         getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit().remove("last_asr_error").apply();
@@ -136,6 +152,7 @@ public final class SmartFkInputMethod extends InputMethodService {
                     if (current != null && !current.source.equals(lang)) return;
                     Section s = ensureSection(lang);
                     s.preview = translation.trim();
+                    clearDiagnostic();
                     render(s);
                 });
             }
@@ -168,6 +185,7 @@ public final class SmartFkInputMethod extends InputMethodService {
                         Section s=item.destination;
                         if (s.text.length()>0) s.text.append(' ');
                         s.text.append(value.trim());
+                        clearDiagnostic();
                         s.preview="";
                         render(s);
                     }
@@ -361,6 +379,36 @@ public final class SmartFkInputMethod extends InputMethodService {
                     return true;
             }
             return true;
+        }
+    }
+
+    private void showDiagnostic(String message) {
+        if (!active || diagnostic == null) return;
+        diagnostic.setText(message);
+        diagnostic.setVisibility(View.VISIBLE);
+    }
+    private void clearDiagnostic() {
+        if (diagnostic != null) diagnostic.setVisibility(View.GONE);
+    }
+
+    /**
+     * The Android IME host attaches input views with WRAP_CONTENT.
+     * Every child must have an explicit height, including the invisible touch layer.
+     * Clamp the root itself to keyboard-row height, never to the screen height.
+     */
+    private static final class FixedHeightPanel extends FrameLayout {
+        private final int desiredHeight;
+        FixedHeightPanel(Context context, int height) {
+            super(context);
+            desiredHeight=height;
+            setMinimumHeight(height);
+        }
+        @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int mode=View.MeasureSpec.getMode(heightMeasureSpec);
+            int height=(mode==View.MeasureSpec.UNSPECIFIED)
+                ?desiredHeight:Math.min(desiredHeight,View.MeasureSpec.getSize(heightMeasureSpec));
+            super.onMeasure(widthMeasureSpec,
+                View.MeasureSpec.makeMeasureSpec(Math.max(1,height),View.MeasureSpec.EXACTLY));
         }
     }
 
