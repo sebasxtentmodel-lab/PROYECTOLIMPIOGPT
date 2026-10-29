@@ -101,9 +101,24 @@ final class OfflineTranslation {
         }
     }
 
+    /**
+     * Preserve the real Turkish/Spanish casing required by the neural model.
+     * Vosk hypotheses arrive lowercase and without terminal punctuation.
+     */
+    static String prepareText(String source,String phrase){
+        String text=phrase.trim().replaceAll("\\s+"," ");
+        if(text.isEmpty())return text;
+        java.util.Locale locale="tr".equals(source)?new java.util.Locale("tr","TR"):
+            new java.util.Locale("es","ES");
+        int i=text.offsetByCodePoints(0,1);
+        text=text.substring(0,i).toUpperCase(locale)+text.substring(i);
+        char last=text.charAt(text.length()-1);
+        if(last!='.'&&last!='?'&&last!='!'&&last!='…')text+=".";
+        return text;
+    }
     private String translateNow(String source,String phrase) throws Exception {
         setup("es".equals(source)?"es":"tr");
-        byte[][] inputs={phrase.getBytes(StandardCharsets.UTF_8)};
+        byte[][] inputs={prepareText(source,phrase).getBytes(StandardCharsets.UTF_8)};
         byte[][] result=BergamotNative.nativePivot(service,first,second,inputs);
         if(result==null || result.length==0 || result[0]==null)
             throw new IllegalStateException("Bergamot devolvió resultado vacío");
