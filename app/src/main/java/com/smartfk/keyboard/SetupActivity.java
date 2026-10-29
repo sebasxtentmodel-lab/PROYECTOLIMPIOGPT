@@ -102,7 +102,7 @@ public final class SetupActivity extends Activity {
             "Turco → español",
             "Español → turco"
         };
-        String saved=getSharedPreferences("smartfk",MODE_PRIVATE)
+        String savedMode=getSharedPreferences("smartfk",MODE_PRIVATE)
             .getString("source_language","auto");
         for(int i=0;i<keys.length;i++) {
             final String key=keys[i];
@@ -111,7 +111,7 @@ public final class SetupActivity extends Activity {
             radio.setText(names[i]);
             radio.setTextColor(0xFF202020);
             choice.addView(radio);
-            radio.setChecked(saved.equals(key));
+            radio.setChecked(savedMode.equals(key));
             radio.setOnClickListener(v -> {
                 getSharedPreferences("smartfk",MODE_PRIVATE).edit()
                     .putString("source_language",key).apply();
