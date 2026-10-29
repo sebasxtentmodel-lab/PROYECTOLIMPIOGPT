@@ -62,7 +62,7 @@ public final class SmartFkInputMethod extends InputMethodService {
         });
         microphone = new ContinuousVoice(this, new ContinuousVoice.Events() {
             @Override public void status(String state) {
-                ui.post(() -> showDiagnostic(state));
+                ui.post(() -> { if (state.isEmpty()) clearDiagnostic(); else showDiagnostic(state); });
             }
             @Override public void partial(String lang, String words) {
                 ui.post(() -> acceptPartial(lang,words));
