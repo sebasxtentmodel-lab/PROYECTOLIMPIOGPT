@@ -239,7 +239,13 @@ final class ContinuousVoice {
                         Candidate candidate=select(
                             candidate(trEnd?tr.getResult():"","tr"),
                             candidate(esEnd?es.getResult():"","es"));
-                        emitFinal(candidate,mode);
+                        // When Turkish-specific Sherpa ASR is available, let it
+                        // decide final Turkish words. Vosk remains a fast preview
+                        // source, never adding inaccurate duplicate final text.
+                        if (!("tr".equals(candidate.language) &&
+                                whisper.prefersTurkishFinals())) {
+                            emitFinal(candidate,mode);
+                        }
                     }else if(SystemClock.elapsedRealtime()-lastPreview>=350){
                         Candidate candidate=select(
                             candidate(tr==null?"":tr.getPartialResult(),"tr"),
