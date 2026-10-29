@@ -131,7 +131,7 @@ public final class SetupActivity extends Activity {
             if(models==null) models=new OfflineTranslation(this);
             models.prepare(new OfflineTranslation.Callback() {
                 @Override public void onSuccess(String s) { runOnUiThread(() -> {
-                    if(s.contains("turco")) turkishReady=true;
+                    if(s.startsWith("Modelo turco → español")) turkishReady=true;
                     if(s.contains("español → turco")) spanishReady=true;
                     modelsStatus.setText("Traducción turco → español: "+
                         (turkishReady?"LISTA":"comprobando")+
