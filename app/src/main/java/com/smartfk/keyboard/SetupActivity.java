@@ -9,8 +9,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
-import android.speech.tts.TextToSpeech;
-import android.speech.tts.Voice;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
@@ -22,7 +20,6 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.util.Set;
 
 /**
  * This activity is only setup and diagnostics. The actual keyboard appears in
@@ -34,7 +31,6 @@ public final class SetupActivity extends Activity {
     private TextView voicesStatus;
     private TextView diagnostics;
     private OfflineTranslation models;
-    private TextToSpeech voiceEngine;
     private EditText tester;
     private boolean turkishReady;
     private boolean spanishReady;
@@ -170,31 +166,13 @@ public final class SetupActivity extends Activity {
                     modelsStatus.setText("El traductor NO está funcionando: " + err)); }
             });
         });
-        voicesStatus=label("Voces offline: comprobando…",15);
+        voicesStatus=label("Lectura en voz alta: opcional; no se necesita para escuchar y traducir.",15);
         root.addView(voicesStatus);
         diagnostics=label("",14);
         root.addView(diagnostics);
         Button check=button(root,"VER ESTADO Y ERRORES");
         check.setOnClickListener(v->refreshState());
         setContentView(scroll);
-        voiceEngine=new TextToSpeech(this,code -> {
-            if(code!=TextToSpeech.SUCCESS) {
-                runOnUiThread(() -> voicesStatus.setText("Motor de voz no disponible"));
-                return;
-            }
-            Set<Voice> all=voiceEngine.getVoices();
-            boolean es=false, tr=false;
-            if(all!=null) for(Voice voice:all) {
-                if(voice.getLocale()!=null && !voice.isNetworkConnectionRequired()) {
-                    es |= "es".equals(voice.getLocale().getLanguage());
-                    tr |= "tr".equals(voice.getLocale().getLanguage());
-                }
-            }
-            final boolean esReady=es, trReady=tr;
-            runOnUiThread(() -> voicesStatus.setText(
-                "Voz española offline: "+(esReady?"DISPONIBLE":"FALTA")+
-                "\nVoz turca offline: "+(trReady?"DISPONIBLE":"FALTA")));
-        });
     }
 
     private TextView label(String value,int size){
@@ -259,7 +237,6 @@ public final class SetupActivity extends Activity {
         if(code==30) refreshState();
     }
     @Override protected void onDestroy() {
-        if(voiceEngine!=null) voiceEngine.shutdown();
         if(models!=null) models.close();
         super.onDestroy();
     }
