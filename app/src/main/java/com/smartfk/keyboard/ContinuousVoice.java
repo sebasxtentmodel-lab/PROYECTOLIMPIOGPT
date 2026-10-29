@@ -35,6 +35,7 @@ final class ContinuousVoice {
     private String previousLanguage = "tr";
     private volatile boolean resetAfterPlayback;
     private long lastEmittedEndMs;
+    private long lastVoskAt;
 
     ContinuousVoice(Context context, Events events) {
         this.context = context.getApplicationContext();
@@ -68,10 +69,12 @@ final class ContinuousVoice {
     private void capture() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
         AudioRecord r = null;
+        WhisperFallback whisper = null;
         try {
             events.status("Cargando motores de voz sin Internet…");
             String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
                 .getString("source_language","tr");
+            whisper = new WhisperFallback(context,events,mode);
             boolean useTr = !"es".equals(mode);
             boolean useEs = !"tr".equals(mode);
             File turkish = useTr ? materialize("models/tr") : null;
@@ -114,7 +117,11 @@ final class ContinuousVoice {
                         events.audioLevel(average, systemSilenced);
                         lastAudioReport=time;
                     }
-                    if (suppressRecognition) continue;
+                    if (suppressRecognition) {
+                        whisper.reset();
+                        continue;
+                    }
+                    whisper.feed(chunk,count,lastVoskAt);
                     if (resetAfterPlayback) {
                         // Discard the half-recognized sentence heard before TTS playback.
                         if (tr != null) tr.reset();
@@ -134,6 +141,7 @@ final class ContinuousVoice {
                             if (!"auto".equals(mode) || now - lastEmittedEndMs >= 1050) {
                                 previousLanguage = choice.lang;
                                 events.finalWords(choice.lang, choice.words);
+                                lastVoskAt=now;
                                 lastEmittedEndMs = now;
                             }
                         }
@@ -141,7 +149,10 @@ final class ContinuousVoice {
                         Candidate a = candidate(tr == null ? "" : tr.getPartialResult(), "tr");
                         Candidate b = candidate(es == null ? "" : es.getPartialResult(), "es");
                         Candidate choice = select(a,b);
-                        if (!choice.words.isEmpty()) events.partial(choice.lang, choice.words);
+                        if (!choice.words.isEmpty()) {
+                            lastVoskAt=android.os.SystemClock.elapsedRealtime();
+                            events.partial(choice.lang,choice.words);
+                        }
                         lastPartial = android.os.SystemClock.elapsedRealtime();
                     }
                 }
@@ -149,6 +160,7 @@ final class ContinuousVoice {
         } catch (Exception e) {
             if (running) events.error(e.getClass().getSimpleName() + ": " + e.getMessage());
         } finally {
+            if (whisper != null) whisper.close();
             if (r != null) {
                 try { if (r.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) r.stop(); }
                 catch (Exception ignored) {}
