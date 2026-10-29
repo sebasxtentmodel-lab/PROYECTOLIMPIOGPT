@@ -15,7 +15,7 @@ import java.util.function.LongSupplier;
 /** AudioRecord runs independently of Whisper; decoding never blocks capture. */
 final class WhisperFallback {
     private static final int WINDOW=16000*5;
-    private static final String ASSET="whisper/ggml-tiny-q5_1.bin";
+    private static final String ASSET="whisper/ggml-base-q5_1.bin";
     private final Context context;
     private final ContinuousVoice.Events events;
     private final ExecutorService decoder=Executors.newSingleThreadExecutor(r -> {
@@ -62,8 +62,8 @@ final class WhisperFallback {
         try {
             if(closed)return;
             if(modelHandle==0) {
-                File out=new File(context.getNoBackupFilesDir(),"smartfk-whisper-tiny-q5_1.bin");
-                if(!out.isFile()||out.length()<30000000L) {
+                File out=new File(context.getNoBackupFilesDir(),"smartfk-whisper-base-q5_1.bin");
+                if(!out.isFile()||out.length()<50000000L) {
                     File tmp=new File(out.getAbsolutePath()+".tmp");
                     try(InputStream in=context.getAssets().open(ASSET);
                         FileOutputStream fos=new FileOutputStream(tmp)) {
