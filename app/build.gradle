@@ -9,8 +9,8 @@ android {
         applicationId 'com.smartfk.keyboard'
         minSdk 29
         targetSdk 35
-        versionCode 15
-        versionName '0.12.0-sherpa-turkish-qa'
+        versionCode 16
+        versionName '0.12.1-sherpa-audited'
         ndk { abiFilters 'arm64-v8a', 'x86_64' }
     }
     androidResources { noCompress += ['bin', 'spm', 'onnx', 'txt'] }
@@ -24,6 +24,7 @@ android {
 }
 dependencies {
     implementation 'com.alphacephei:vosk-android:0.3.47'
+    testImplementation 'junit:junit:4.13.2'
     implementation('com.github.k2-fsa:sherpa-onnx:v1.13.8') {
         // Android AAR already contains the Kotlin API classes; exclude redundant JVM jar.
         exclude group: 'com.github.k2-fsa.sherpa-onnx', module: 'sherpa-onnx-jvm'
