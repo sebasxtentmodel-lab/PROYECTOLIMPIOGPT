@@ -7,6 +7,7 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Process;
+import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.vosk.Model;
@@ -14,233 +15,301 @@ import org.vosk.Recognizer;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
-/** Single AudioRecord session. Does NOT restart on silence or while TTS is playing. */
+/**
+ * Microphone is a producer ONLY; recognition is a completely separate consumer.
+ * Silences never stop/restart the AudioRecord session. The queue is bounded so a
+ * slow neural backend cannot exhaust RAM or stall the microphone.
+ */
 final class ContinuousVoice {
     interface Events {
-        void status(String state);
+        void status(String message);
         void audioLevel(int averagePcm, boolean androidSilenced);
-        void partial(String source, String words);
-        void finalWords(String source, String words);
+        void partial(String source, String text);
+        void finalWords(String source, String text);
         void error(String message);
     }
-
+    private static final int SAMPLE_RATE=16000;
+    private static final int FRAMES=1600;
+    private static final int QUEUE_CAPACITY=120; // 12 seconds of PCM, ~375 KiB
     private final Context context;
     private final Events events;
-    private volatile boolean running;
-    private volatile boolean suppressRecognition;
-    private volatile AudioRecord recorder;
-    private Thread worker;
-    private boolean pendingStart;
-    private String previousLanguage = "tr";
-    private volatile boolean resetAfterPlayback;
-    private long lastEmittedEndMs;
+    private final ArrayBlockingQueue<short[]> audioQueue=new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    private volatile AudioRecord microphone;
+    private volatile boolean running, suppressRecognition, resetRecognizer;
     private volatile long lastVoskAt;
+    private volatile String activeMode="";
+    private Thread captureThread, recognizerThread;
+    private boolean restartPending;
+    private String previousLanguage="tr", lastFinalText="";
+    private long lastFinalAt,lastEmittedEndMs;
+    private int droppedFrames;
 
-    ContinuousVoice(Context context, Events events) {
-        this.context = context.getApplicationContext();
-        this.events = events;
+    ContinuousVoice(Context context,Events events){
+        this.context=context.getApplicationContext();
+        this.events=events;
+    }
+    private String currentMode() {
+        String mode=context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
+            .getString("source_language","tr");
+        return "es".equals(mode)||"auto".equals(mode) ? mode:"tr";
     }
 
     synchronized void start() {
-        if (running) return;
-        if (worker != null && worker.isAlive()) { pendingStart = true; return; }
-        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            events.error("Falta permiso de micrófono"); return;
+        if(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                !=PackageManager.PERMISSION_GRANTED) {
+            events.error("Falta el permiso del micrófono");
+            return;
         }
-        running = true;
-        worker = new Thread(this::capture, "smartfk-capture");
-        worker.start();
+        if(running){
+            if(!currentMode().equals(activeMode)){
+                restartPending=true;
+                stopCaptureOnly();
+            }
+            return;
+        }
+        if((captureThread!=null && captureThread.isAlive())||
+           (recognizerThread!=null && recognizerThread.isAlive())){
+            restartPending=true;
+            return;
+        }
+        activeMode=currentMode();
+        audioQueue.clear();
+        droppedFrames=0;
+        lastVoskAt=0;
+        resetRecognizer=false;
+        running=true;
+        recognizerThread=new Thread(()->decode(activeMode),"smartfk-asr");
+        captureThread=new Thread(this::capture,"smartfk-microphone");
+        recognizerThread.start();
+        captureThread.start();
     }
 
     synchronized void stop() {
-        running = false;
-        pendingStart = false;
-        AudioRecord r = recorder;
-        if (r != null) try { r.stop(); } catch (Exception ignored) {}
+        restartPending=false;
+        stopCaptureOnly();
+    }
+    private void stopCaptureOnly(){
+        running=false;
+        AudioRecord r=microphone;
+        if(r!=null)try{r.stop();}catch(Exception ignored){}
     }
 
-    void setSpeechPlayback(boolean playing) {
-        suppressRecognition = playing;
-        if (playing) resetAfterPlayback = true;
+    void setSpeechPlayback(boolean playing){
+        suppressRecognition=playing;
+        if(playing)resetRecognizer=true;
     }
-
-    private void capture() {
+    private void capture(){
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
-        AudioRecord r = null;
-        WhisperFallback whisper = null;
-        try {
-            events.status("Cargando motores de voz sin Internet…");
-            String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
-                .getString("source_language","tr");
-            whisper = new WhisperFallback(context,events,mode,()->lastVoskAt);
-            boolean useTr = !"es".equals(mode);
-            boolean useEs = !"tr".equals(mode);
-            File turkish = useTr ? materialize("models/tr") : null;
-            File spanish = useEs ? materialize("models/es") : null;
-            try (Model mTr = useTr ? new Model(turkish.getAbsolutePath()) : null;
-                 Model mEs = useEs ? new Model(spanish.getAbsolutePath()) : null;
-                 Recognizer tr = useTr ? new Recognizer(mTr, 16000.0f) : null;
-                 Recognizer es = useEs ? new Recognizer(mEs, 16000.0f) : null) {
-                if (tr != null) tr.setWords(true);
-                if (es != null) es.setWords(true);
-                int buffer = AudioRecord.getMinBufferSize(16000,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-                if (buffer <= 0) throw new IllegalStateException("Micrófono PCM16 de 16kHz no disponible");
-                r = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    Math.max(buffer * 2, 8192));
-                if (r.getState() != AudioRecord.STATE_INITIALIZED)
-                    throw new IllegalStateException("No se inicializó AudioRecord");
-                recorder = r;
-                if (!running) return;
-                r.startRecording();
-                if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
-                    throw new IllegalStateException("No se pudo iniciar la grabación");
-                events.status("");
-                short[] chunk = new short[1600];
-                long lastPartial = 0;
-                long lastAudioReport = 0;
-                while (running) {
-                    int count = r.read(chunk, 0, chunk.length, AudioRecord.READ_BLOCKING);
-                    if (count < 0) throw new IllegalStateException("Error AudioRecord: " + count);
-                    if (count == 0) continue;
-                    long time = android.os.SystemClock.elapsedRealtime();
-                    if (time - lastAudioReport > 1200) {
-                        long sum = 0;
-                        for (int k = 0; k < count; k++) sum += Math.abs((int)chunk[k]);
-                        int average=(int)(sum / count);
-                        android.media.AudioRecordingConfiguration conf =
-                            r.getActiveRecordingConfiguration();
-                        boolean systemSilenced=conf != null && conf.isClientSilenced();
-                        events.audioLevel(average, systemSilenced);
-                        lastAudioReport=time;
-                    }
-                    if (suppressRecognition) {
-                        whisper.reset();
-                        continue;
-                    }
-                    whisper.feed(chunk,count,lastVoskAt);
-                    if (resetAfterPlayback) {
-                        // Discard the half-recognized sentence heard before TTS playback.
-                        if (tr != null) tr.reset();
-                        if (es != null) es.reset();
-                        resetAfterPlayback = false;
-                        lastEmittedEndMs = 0;
-                    }
-                    boolean trEnd = tr != null && tr.acceptWaveForm(chunk, count);
-                    boolean esEnd = es != null && es.acceptWaveForm(chunk, count);
-                    if (trEnd || esEnd) {
-                        Candidate a = candidate(trEnd ? tr.getResult() : "", "tr");
-                        Candidate b = candidate(esEnd ? es.getResult() : "", "es");
-                        Candidate choice = select(a,b);
-                        if (!choice.words.isEmpty()) {
-                            long now = android.os.SystemClock.elapsedRealtime();
-                            // Opposite-language recognizer may finalize the SAME sound later.
-                            if (!"auto".equals(mode) || now - lastEmittedEndMs >= 1050) {
-                                previousLanguage = choice.lang;
-                                events.finalWords(choice.lang, choice.words);
-                                lastVoskAt=now;
-                                lastEmittedEndMs = now;
-                            }
-                        }
-                    } else if (android.os.SystemClock.elapsedRealtime() - lastPartial >= 400) {
-                        Candidate a = candidate(tr == null ? "" : tr.getPartialResult(), "tr");
-                        Candidate b = candidate(es == null ? "" : es.getPartialResult(), "es");
-                        Candidate choice = select(a,b);
-                        if (!choice.words.isEmpty()) {
-                            lastVoskAt=android.os.SystemClock.elapsedRealtime();
-                            events.partial(choice.lang,choice.words);
-                        }
-                        lastPartial = android.os.SystemClock.elapsedRealtime();
-                    }
+        AudioRecord r=null;
+        try{
+            int minimum=AudioRecord.getMinBufferSize(SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
+            if(minimum<=0)throw new IllegalStateException("16 kHz PCM no disponible");
+            r=new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,
+                Math.max(minimum*2,FRAMES*4));
+            if(r.getState()!=AudioRecord.STATE_INITIALIZED)
+                throw new IllegalStateException("AudioRecord no se inicializó");
+            microphone=r;
+            if(!running)return;
+            r.startRecording();
+            if(r.getRecordingState()!=AudioRecord.RECORDSTATE_RECORDING)
+                throw new IllegalStateException("Android no permitió grabar");
+            events.status("Micrófono activo. Preparando reconocimiento offline…");
+            long lastReport=0;
+            short[] buffer=new short[FRAMES];
+            while(running){
+                int length=r.read(buffer,0,buffer.length,AudioRecord.READ_BLOCKING);
+                if(length<0){
+                    if(running)throw new IllegalStateException("AudioRecord read: "+length);
+                    break;
+                }
+                if(length==0)continue;
+                long now=SystemClock.elapsedRealtime();
+                if(now-lastReport>1250){
+                    long sum=0;
+                    for(int i=0;i<length;i++)sum+=Math.abs((int)buffer[i]);
+                    android.media.AudioRecordingConfiguration config=r.getActiveRecordingConfiguration();
+                    events.audioLevel((int)(sum/length),config!=null && config.isClientSilenced());
+                    lastReport=now;
+                }
+                if(suppressRecognition)continue;
+                short[] copy=new short[length];
+                System.arraycopy(buffer,0,copy,0,length);
+                if(!audioQueue.offer(copy)){
+                    // Drop oldest audio rather than blocking the microphone thread.
+                    audioQueue.poll();
+                    audioQueue.offer(copy);
+                    droppedFrames++;
+                    if(droppedFrames==1 || droppedFrames%150==0)
+                        events.error("Reconocimiento atrasado: "+(droppedFrames/10.0f)
+                            +" s de audio descartado. Cierra apps pesadas.");
                 }
             }
-        } catch (Exception e) {
-            if (running) events.error(e.getClass().getSimpleName() + ": " + e.getMessage());
-        } finally {
-            if (whisper != null) whisper.close();
-            if (r != null) {
-                try { if (r.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) r.stop(); }
-                catch (Exception ignored) {}
+        }catch(Throwable error){
+            if(running)events.error("Micrófono: "+error.getClass().getSimpleName()
+                +": "+error.getMessage());
+        }finally{
+            if(r!=null){
+                try{if(r.getRecordingState()==AudioRecord.RECORDSTATE_RECORDING)r.stop();}
+                catch(Exception ignored){}
                 r.release();
             }
-            synchronized (this) {
-                recorder = null;
-                worker = null;
-                running = false;
-                if (pendingStart) {
-                    pendingStart = false;
+            microphone=null;
+            running=false;
+        }
+    }
+
+    private void decode(String mode){
+        Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT);
+        WhisperFallback whisper=null;
+        try{
+            events.status("Abriendo modelos Vosk locales…");
+            boolean useTr=!"es".equals(mode),useEs=!"tr".equals(mode);
+            File trDir=useTr?materialize("models/tr"):null;
+            File esDir=useEs?materialize("models/es"):null;
+            try(Model trModel=useTr?new Model(trDir.getAbsolutePath()):null;
+                Model esModel=useEs?new Model(esDir.getAbsolutePath()):null;
+                Recognizer tr=useTr?new Recognizer(trModel,SAMPLE_RATE):null;
+                Recognizer es=useEs?new Recognizer(esModel,SAMPLE_RATE):null){
+                if(tr!=null)tr.setWords(true);
+                if(es!=null)es.setWords(true);
+                whisper=new WhisperFallback(context,events,mode,()->lastVoskAt);
+                events.status("");
+                long lastPreview=0;
+                while(running || !audioQueue.isEmpty()){
+                    short[] chunk=audioQueue.poll(200,TimeUnit.MILLISECONDS);
+                    if(chunk==null)continue;
+                    if(suppressRecognition){audioQueue.clear();continue;}
+                    if(resetRecognizer){
+                        if(tr!=null)tr.reset();
+                        if(es!=null)es.reset();
+                        whisper.reset();
+                        resetRecognizer=false;
+                    }
+                    // Whisper gets its own background worker and never blocks this decoder.
+                    whisper.feed(chunk,chunk.length,lastVoskAt);
+                    boolean trEnd=tr!=null&&tr.acceptWaveForm(chunk,chunk.length);
+                    boolean esEnd=es!=null&&es.acceptWaveForm(chunk,chunk.length);
+                    if(trEnd||esEnd){
+                        Candidate candidate=select(
+                            candidate(trEnd?tr.getResult():"","tr"),
+                            candidate(esEnd?es.getResult():"","es"));
+                        emitFinal(candidate,mode);
+                    }else if(SystemClock.elapsedRealtime()-lastPreview>=350){
+                        Candidate candidate=select(
+                            candidate(tr==null?"":tr.getPartialResult(),"tr"),
+                            candidate(es==null?"":es.getPartialResult(),"es"));
+                        if(!candidate.text.isEmpty()){
+                            lastVoskAt=SystemClock.elapsedRealtime();
+                            events.partial(candidate.language,candidate.text);
+                        }
+                        lastPreview=SystemClock.elapsedRealtime();
+                    }
+                }
+                // Deliver the last unfinished utterance on clean stop, only if still visible.
+                if(running){
+                    Candidate last=select(
+                        candidate(tr==null?"":tr.getFinalResult(),"tr"),
+                        candidate(es==null?"":es.getFinalResult(),"es"));
+                    emitFinal(last,mode);
+                }
+            }
+        }catch(InterruptedException ignored){
+            Thread.currentThread().interrupt();
+        }catch(Throwable error){
+            if(running)events.error("Vosk: "+error.getClass().getSimpleName()
+                +": "+error.getMessage());
+        }finally{
+            if(whisper!=null)whisper.close();
+            synchronized(this){
+                recognizerThread=null;
+                if(!running && restartPending && (captureThread==null || !captureThread.isAlive())){
+                    restartPending=false;
                     start();
                 }
             }
         }
     }
 
-    private Candidate select(Candidate a, Candidate b) {
-        if (a.words.isEmpty()) return b;
-        if (b.words.isEmpty()) return a;
-        double sa = a.score + (a.lang.equals(previousLanguage) ? 0.035 : 0);
-        double sb = b.score + (b.lang.equals(previousLanguage) ? 0.035 : 0);
-        return sa >= sb ? a : b;
+    private void emitFinal(Candidate candidate,String mode){
+        if(candidate.text.isEmpty())return;
+        long now=SystemClock.elapsedRealtime();
+        String normalized=candidate.text.toLowerCase(Locale.ROOT).trim();
+        if(normalized.equals(lastFinalText)&&now-lastFinalAt<2600)return;
+        if("auto".equals(mode)&&now-lastEmittedEndMs<850)return;
+        lastFinalText=normalized;
+        lastFinalAt=now;
+        previousLanguage=candidate.language;
+        lastVoskAt=now;
+        lastEmittedEndMs=now;
+        events.finalWords(candidate.language,candidate.text);
     }
 
-    private Candidate candidate(String json, String lang) {
-        try {
-            JSONObject o = new JSONObject(json);
-            String words = o.optString("text", o.optString("partial", "")).trim();
-            if (words.isEmpty()) return new Candidate(lang,"",0);
-            JSONArray results = o.optJSONArray("result");
-            double c = 0.5;
-            if (results != null && results.length() > 0) {
-                double sum = 0;
-                for (int i=0; i<results.length(); i++)
-                    sum += results.getJSONObject(i).optDouble("conf", 0.4);
-                c = sum / results.length();
+    private Candidate select(Candidate a,Candidate b){
+        if(a.text.isEmpty())return b;
+        if(b.text.isEmpty())return a;
+        double sa=a.score+(a.language.equals(previousLanguage)?0.035:0);
+        double sb=b.score+(b.language.equals(previousLanguage)?0.035:0);
+        return sa>=sb?a:b;
+    }
+    private Candidate candidate(String json,String lang){
+        try{
+            JSONObject object=new JSONObject(json);
+            String words=object.optString("text",object.optString("partial","")).trim();
+            if(words.isEmpty())return new Candidate(lang,"",0);
+            JSONArray result=object.optJSONArray("result");
+            double confidence=0.5;
+            if(result!=null && result.length()>0){
+                double sum=0;
+                for(int i=0;i<result.length();i++)
+                    sum+=result.getJSONObject(i).optDouble("conf",0.4);
+                confidence=sum/result.length();
             }
-            return new Candidate(lang, words, c + Math.min(0.12,words.length()/450.0));
-        } catch (Exception ignored) { return new Candidate(lang,"",0); }
+            return new Candidate(lang,words,confidence+Math.min(0.12,words.length()/450.0));
+        }catch(Exception ignored){return new Candidate(lang,"",0);}
     }
 
-    private File materialize(String assetPath) throws Exception {
-        File root = new File(context.getFilesDir(), assetPath);
-        File marker = new File(root, ".ready");
-        if (marker.isFile()) return root;
-        if (!root.exists() && !root.mkdirs()) throw new IllegalStateException("No se creó carpeta modelo");
-        String[] children = context.getAssets().list(assetPath);
-        if (children == null || children.length == 0)
-            throw new IllegalStateException("Modelo offline ausente en APK: " + assetPath);
-        copyAssetDir(assetPath,root);
-        if (!marker.createNewFile()) throw new IllegalStateException("Modelo no finalizado");
-        return root;
+    private File materialize(String assetPath)throws Exception{
+        File dir=new File(context.getNoBackupFilesDir(),assetPath);
+        File ready=new File(dir,".ready");
+        if(ready.isFile())return dir;
+        if(!dir.exists()&&!dir.mkdirs())throw new IllegalStateException("No creó carpeta Vosk");
+        String[] children=context.getAssets().list(assetPath);
+        if(children==null||children.length==0)
+            throw new IllegalStateException("Falta modelo de voz "+assetPath);
+        copyAssetDir(assetPath,dir);
+        if(!ready.createNewFile())throw new IllegalStateException("Copia incompleta de "+assetPath);
+        return dir;
     }
-
-    private void copyAssetDir(String relative, File dest) throws Exception {
-        String[] list = context.getAssets().list(relative);
-        if (list == null) throw new IllegalStateException("Asset ilegible");
-        if (list.length == 0) {
-            File parent = dest.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs())
-                throw new IllegalStateException("Carpeta asset");
-            try (InputStream in = context.getAssets().open(relative);
-                 FileOutputStream out = new FileOutputStream(dest)) {
-                byte[] buf = new byte[32768];
-                int n;
-                while ((n=in.read(buf))!=-1) out.write(buf,0,n);
+    private void copyAssetDir(String asset,File destination)throws Exception{
+        String[] children=context.getAssets().list(asset);
+        if(children==null)throw new IllegalStateException("Asset ilegible: "+asset);
+        if(children.length==0){
+            File parent=destination.getParentFile();
+            if(parent!=null&&!parent.exists()&&!parent.mkdirs())
+                throw new IllegalStateException("Sin espacio para "+asset);
+            try(InputStream in=context.getAssets().open(asset);
+                FileOutputStream out=new FileOutputStream(destination)){
+                byte[] bytes=new byte[32768];
+                int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);
             }
-        } else {
-            if (!dest.exists() && !dest.mkdirs()) throw new IllegalStateException("Carpeta asset");
-            for (String item : list) copyAssetDir(relative + "/" + item,new File(dest,item));
+        }else{
+            if(!destination.exists()&&!destination.mkdirs())
+                throw new IllegalStateException("Sin espacio para "+asset);
+            for(String child:children)
+                copyAssetDir(asset+"/"+child,new File(destination,child));
         }
     }
-
-    private static final class Candidate {
-        final String lang;
-        final String words;
+    private static final class Candidate{
+        final String language,text;
         final double score;
-        Candidate(String lang, String words, double score) {
-            this.lang=lang; this.words=words; this.score=score;
+        Candidate(String lang,String text,double confidence){
+            this.language=lang;this.text=text;this.score=confidence;
         }
     }
 }
