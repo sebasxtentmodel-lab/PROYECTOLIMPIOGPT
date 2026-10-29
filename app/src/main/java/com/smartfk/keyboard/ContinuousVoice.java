@@ -112,7 +112,7 @@ final class ContinuousVoice {
                         if (!choice.words.isEmpty()) {
                             long now = android.os.SystemClock.elapsedRealtime();
                             // Opposite-language recognizer may finalize the SAME sound later.
-                            if (now - lastEmittedEndMs >= 1050) {
+                            if (!"auto".equals(mode) || now - lastEmittedEndMs >= 1050) {
                                 previousLanguage = choice.lang;
                                 events.finalWords(choice.lang, choice.words);
                                 lastEmittedEndMs = now;
