@@ -19,6 +19,7 @@ import java.io.InputStream;
 final class ContinuousVoice {
     interface Events {
         void status(String state);
+        void audioLevel(int averagePcm, boolean androidSilenced);
         void partial(String source, String words);
         void finalWords(String source, String words);
         void error(String message);
@@ -97,10 +98,23 @@ final class ContinuousVoice {
                 events.status("");
                 short[] chunk = new short[1600];
                 long lastPartial = 0;
+                long lastAudioReport = 0;
                 while (running) {
                     int count = r.read(chunk, 0, chunk.length, AudioRecord.READ_BLOCKING);
                     if (count < 0) throw new IllegalStateException("Error AudioRecord: " + count);
-                    if (count == 0 || suppressRecognition) continue;
+                    if (count == 0) continue;
+                    long time = android.os.SystemClock.elapsedRealtime();
+                    if (time - lastAudioReport > 1200) {
+                        long sum = 0;
+                        for (int k = 0; k < count; k++) sum += Math.abs((int)chunk[k]);
+                        int average=(int)(sum / count);
+                        android.media.AudioRecordingConfiguration conf =
+                            r.getActiveRecordingConfiguration();
+                        boolean systemSilenced=conf != null && conf.isClientSilenced();
+                        events.audioLevel(average, systemSilenced);
+                        lastAudioReport=time;
+                    }
+                    if (suppressRecognition) continue;
                     if (resetAfterPlayback) {
                         // Discard the half-recognized sentence heard before TTS playback.
                         if (tr != null) tr.reset();
