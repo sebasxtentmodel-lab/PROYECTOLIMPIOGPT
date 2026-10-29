@@ -62,7 +62,16 @@ public final class SmartFkInputMethod extends InputMethodService {
         });
         microphone = new ContinuousVoice(this, new ContinuousVoice.Events() {
             @Override public void status(String state) {
-                ui.post(() -> { if (state.isEmpty()) clearDiagnostic(); else showDiagnostic(state); });
+                ui.post(() -> {
+                    if (!active) return;
+                    if (state.isEmpty()) {
+                        String mode=getSharedPreferences("smartfk",Context.MODE_PRIVATE)
+                            .getString("source_language","tr");
+                        showDiagnostic("Escuchando " + ("es".equals(mode)?"español":
+                            "auto".equals(mode)?"turco o español":"turco") +
+                            "… Habla para iniciar la traducción.");
+                    } else showDiagnostic(state);
+                });
             }
             @Override public void partial(String lang, String words) {
                 ui.post(() -> acceptPartial(lang,words));
@@ -83,7 +92,7 @@ public final class SmartFkInputMethod extends InputMethodService {
     @Override public View onCreateInputView() {
         panel = new FixedHeightPanel(this,dp(PANEL_DP));
         panel.setBackgroundColor(Color.rgb(16,16,16));
-        panel.setLayoutParams(new ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT));
+        panel.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(PANEL_DP)));
         scroller = new ScrollView(this);
         scroller.setBackgroundColor(Color.TRANSPARENT);
         scroller.setFillViewport(true);
@@ -139,6 +148,8 @@ public final class SmartFkInputMethod extends InputMethodService {
 
     private void acceptPartial(String lang,String words) {
         if (!active || words.trim().isEmpty() || speaking) return;
+        if (current==null || (current.view!=null && current.text.length()==0))
+            showDiagnostic("Voz detectada. Traduciendo al idioma contrario…");
         long now=SystemClock.elapsedRealtime();
         if (now - lastPartialRequest < 750) return;
         lastPartialRequest=now;
@@ -156,12 +167,20 @@ public final class SmartFkInputMethod extends InputMethodService {
                     render(s);
                 });
             }
-            @Override public void onFailure(String err) {}
+            @Override public void onFailure(String err) {
+                ui.post(() -> {
+                    if (session!=token || !active) return;
+                    showDiagnostic("Reconocí voz, pero no pude traducir: " + err);
+                    getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+                        .putString("last_translate_error",err).apply();
+                });
+            }
         });
     }
 
     private void acceptFinal(String lang,String words) {
         if (!active || speaking || words.trim().isEmpty()) return;
+        showDiagnostic("Traduciendo frase reconocida…");
         partialSerial++;
         final long token=session;
         if (current != null) { current.preview = ""; render(current); }
@@ -197,6 +216,9 @@ public final class SmartFkInputMethod extends InputMethodService {
                     if (reqId != translationRequestId) return;
                     translating=false;
                     android.util.Log.e("SmartFk","Error al traducir: "+msg);
+                    showDiagnostic("Reconocimiento correcto, traducción falló: "+msg);
+                    getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+                        .putString("last_translate_error",msg).apply();
                     processQueue();
                 });
             }
@@ -417,6 +439,7 @@ public final class SmartFkInputMethod extends InputMethodService {
     }
 
     @Override public boolean onEvaluateFullscreenMode() { return false; }
+    @Override public boolean onEvaluateInputViewShown() { return true; }
     @Override public void onFinishInputView(boolean finishingInput) {
         active=false; session++; queue.clear(); partialSerial++;
         translationRequestId++; translating=false; current=null;
