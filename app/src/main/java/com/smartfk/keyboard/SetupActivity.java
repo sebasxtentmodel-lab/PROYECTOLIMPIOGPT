@@ -12,12 +12,18 @@ import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.RadioGroup;
+import android.widget.RadioButton;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.Voice;
+import java.util.Set;
 import android.widget.TextView;
 
 /** Only the one-time setup page has controls; the keyboard view has none. */
 public final class SetupActivity extends Activity {
     private TextView info;
     private OfflineTranslation models;
+    private TextToSpeech voiceEngine;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -31,6 +37,49 @@ public final class SetupActivity extends Activity {
         info.setTextSize(17);
         info.setText("SmartFk alfa\n\nActiva el micrófono, descarga una vez los dos modelos de traducción y selecciona SmartFk como teclado.\n\nIMPORTANTE: esta versión alfa no es 100 % offline desde la primera instalación: ML Kit necesita descargar los modelos por primera vez. Después, la traducción se realiza localmente. Las voces TTS dependen de las voces sin conexión instaladas en Android.");
         root.addView(info,new LinearLayout.LayoutParams(-1,-2));
+        TextView guide=new TextView(this);
+        guide.setText("\nIdioma hablado (en automático pueden aparecer errores):");
+        guide.setTextColor(0xFF111111);
+        guide.setTextSize(17);
+        root.addView(guide);
+        RadioGroup choices=new RadioGroup(this);
+        choices.setOrientation(LinearLayout.VERTICAL);
+        String[] keys={"auto","tr","es"};
+        String[] labels={"Detectar español o turco automáticamente",
+            "Escucho TURCO y quiero ESPAÑOL (más ligero)",
+            "Escucho ESPAÑOL y quiero TURCO (más ligero)"};
+        String saved=getSharedPreferences("smartfk",MODE_PRIVATE)
+            .getString("source_language","auto");
+        for (int i=0;i<keys.length;i++) {
+            final String language=keys[i];
+            RadioButton b=new RadioButton(this);
+            b.setId(ViewGroup.generateViewId());
+            b.setText(labels[i]);
+            b.setTextColor(0xFF111111);
+            choices.addView(b);
+            b.setChecked(saved.equals(language));
+            b.setOnClickListener(v -> {
+                getSharedPreferences("smartfk",MODE_PRIVATE).edit()
+                    .putString("source_language",language).apply();
+                message("Modo seleccionado: "+b.getText()
+                    +". Se aplicará al abrir nuevamente el teclado.");
+            });
+        }
+        root.addView(choices);
+        voiceEngine=new TextToSpeech(this, status -> {
+            if (status!=TextToSpeech.SUCCESS) { message("Motor de voz no disponible.");return; }
+            Set<Voice> list=voiceEngine.getVoices();
+            boolean es=false,tr=false;
+            if (list!=null) for (Voice voice : list) {
+                if (!voice.isNetworkConnectionRequired() && voice.getLocale()!=null) {
+                    if ("es".equals(voice.getLocale().getLanguage())) es=true;
+                    if ("tr".equals(voice.getLocale().getLanguage())) tr=true;
+                }
+            }
+            message("Voces sin Internet: español "+(es?"disponible":"NO instalada")
+                +" · turco "+(tr?"disponible":"NO instalada")
+                +". Si falta una, el toque izquierdo no podrá reproducir ese idioma.");
+        });
         Button permission = button("Conceder acceso al micrófono",root);
         permission.setOnClickListener(v -> {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
@@ -73,6 +122,7 @@ public final class SetupActivity extends Activity {
                 ? "Micrófono autorizado." : "Micrófono no autorizado.");
     }
     @Override public void onDestroy() {
+        if (voiceEngine != null) voiceEngine.shutdown();
         if (models != null) models.close();
         super.onDestroy();
     }
