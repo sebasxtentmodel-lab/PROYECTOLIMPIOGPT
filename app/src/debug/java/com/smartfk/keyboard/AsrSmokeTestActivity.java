@@ -23,6 +23,7 @@ public final class AsrSmokeTestActivity extends Activity {
         new Thread(()->{
             try {
                 // Real voice PCM → Vosk → Bergamot → translated text.
+                testSherpaTurkish();
                 String turkish = testVosk("tr","tr_fixture.pcm");
                 String spanish = testVosk("es","es_fixture.pcm");
                 if(turkish.trim().isEmpty() || spanish.trim().isEmpty())
@@ -86,6 +87,25 @@ public final class AsrSmokeTestActivity extends Activity {
         if(failure.get()!=null || translation.get()==null || translation.get().trim().isEmpty())
             throw new IllegalStateException("Voice → translation failed "+lang+": "+failure.get());
         Log.i(TAG,lang.toUpperCase()+"_AUDIO_TRANSLATED="+translation.get());
+    }
+    private void testSherpaTurkish() throws Exception {
+        byte[] pcm;
+        try (InputStream in=getAssets().open("tr_fixture.pcm")) {
+            java.io.ByteArrayOutputStream buf=new java.io.ByteArrayOutputStream();
+            byte[] chunk=new byte[8192];
+            int n; while((n=in.read(chunk))!=-1)buf.write(chunk,0,n);
+            pcm=buf.toByteArray();
+        }
+        short[] samples=new short[pcm.length/2];
+        for(int i=0;i<samples.length;i++){
+            samples[i]=(short)((pcm[2*i]&255)|(pcm[2*i+1]<<8));
+        }
+        TurkishSherpa recognizer=new TurkishSherpa(this);
+        try {
+            String text=recognizer.transcribe(samples);
+            Log.i(TAG,"TR_SHERPA_RESULT="+text);
+            if(text.isEmpty())throw new IllegalStateException("Turkish Sherpa model gave no text");
+        }finally {recognizer.close();}
     }
     private void testWhisper(String lang,String fixture) throws Exception {
         File path=new File(getCacheDir(),"ggml-base-q5_1.bin");
