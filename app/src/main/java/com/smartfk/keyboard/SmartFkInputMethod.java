@@ -427,8 +427,9 @@ public final class SmartFkInputMethod extends InputMethodService {
         }
         @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
             int mode=View.MeasureSpec.getMode(heightMeasureSpec);
-            int height=(mode==View.MeasureSpec.UNSPECIFIED)
-                ?desiredHeight:Math.min(desiredHeight,View.MeasureSpec.getSize(heightMeasureSpec));
+            int available=View.MeasureSpec.getSize(heightMeasureSpec);
+            int height=(mode==View.MeasureSpec.UNSPECIFIED || available<=0)
+                ?desiredHeight:Math.min(desiredHeight,available);
             super.onMeasure(widthMeasureSpec,
                 View.MeasureSpec.makeMeasureSpec(Math.max(1,height),View.MeasureSpec.EXACTLY));
         }
@@ -439,6 +440,12 @@ public final class SmartFkInputMethod extends InputMethodService {
     }
 
     @Override public boolean onEvaluateFullscreenMode() { return false; }
+    // Even when Android asks about extract/fullscreen layouts, keep this IME in
+    // the lower keyboard region and leave the host app visible.
+    @Override public void onConfigureWindow(android.view.Window window,
+            boolean fullscreen, boolean candidatesOnly) {
+        super.onConfigureWindow(window,false,candidatesOnly);
+    }
     @Override public boolean onEvaluateInputViewShown() { return true; }
     @Override public void onFinishInputView(boolean finishingInput) {
         active=false; session++; queue.clear(); partialSerial++;
