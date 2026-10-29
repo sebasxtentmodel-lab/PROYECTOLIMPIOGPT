@@ -44,6 +44,7 @@ public final class SmartFkInputMethod extends InputMethodService {
     private long session = 0;
     private long partialSerial = 0;
     private long lastPartialRequest = 0;
+    private long lastRecognizedAudio = 0;
     private final ArrayList<Section> sections = new ArrayList<>();
     private final ArrayDeque<Recognition> queue = new ArrayDeque<>();
     private boolean translating;
@@ -73,10 +74,38 @@ public final class SmartFkInputMethod extends InputMethodService {
                     } else showDiagnostic(state);
                 });
             }
+            @Override public void audioLevel(int averagePcm, boolean androidSilenced) {
+                getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+                    .putInt("last_pcm_average", averagePcm)
+                    .putBoolean("audio_client_silenced",androidSilenced)
+                    .putLong("last_audio_heartbeat",System.currentTimeMillis())
+                    .apply();
+                ui.post(() -> {
+                    if (!active || speaking || SystemClock.elapsedRealtime()-lastRecognizedAudio<9000) return;
+                    if (androidSilenced) {
+                        showDiagnostic("Android está silenciando la entrada del micrófono. "
+                            +"Cierra cualquier otra app que esté grabando audio.");
+                    } else if (averagePcm<35) {
+                        showDiagnostic("Micrófono abierto, pero el audio recibido es casi silencio. "
+                            +"Comprueba el acceso al micrófono del sistema.");
+                    } else {
+                        showDiagnostic("El micrófono recibe sonido, pero Vosk todavía no detecta palabras. "
+                            +"Comprueba el idioma y la pronunciación.");
+                    }
+                });
+            }
             @Override public void partial(String lang, String words) {
+                if (!words.isEmpty()) {
+                    getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+                        .putString("last_asr_text",words).putString("last_asr_language",lang).apply();
+                }
                 ui.post(() -> acceptPartial(lang,words));
             }
             @Override public void finalWords(String lang, String words) {
+                if (!words.isEmpty()) {
+                    getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+                        .putString("last_asr_text",words).putString("last_asr_language",lang).apply();
+                }
                 ui.post(() -> acceptFinal(lang,words));
             }
             @Override public void error(String detail) {
@@ -128,26 +157,35 @@ public final class SmartFkInputMethod extends InputMethodService {
         translationRequestId++;
         partialSerial++;
         lastPartialRequest = 0;
+        lastRecognizedAudio = SystemClock.elapsedRealtime();
         current = null;
         followingLatest = true;
         final long token = session;
-        translate.prepare(new OfflineTranslation.Callback() {
+        String source = getSharedPreferences("smartfk",Context.MODE_PRIVATE)
+            .getString("source_language","tr");
+        OfflineTranslation.Callback callback = new OfflineTranslation.Callback() {
             @Override public void onSuccess(String text) {
-                if (active && session==token) {
-                    android.util.Log.i("SmartFk",text);
-                }
+                android.util.Log.i("SmartFk",text);
             }
             @Override public void onFailure(String err) {
                 android.util.Log.e("SmartFk",err);
-                ui.post(() -> showDiagnostic("Error al preparar traducción: " + err));
+                ui.post(() -> {
+                    if (active && session==token)
+                        showDiagnostic("Traducción sin preparar: " + err);
+                });
             }
-        });
-        getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit().remove("last_asr_error").apply();
+        };
+        if ("auto".equals(source)) translate.prepare(callback);
+        else translate.prepareSource(source,callback);
+        getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit()
+            .remove("last_asr_error").remove("last_translate_error")
+            .remove("last_asr_text").apply();
         microphone.start();
     }
 
     private void acceptPartial(String lang,String words) {
         if (!active || words.trim().isEmpty() || speaking) return;
+        lastRecognizedAudio = SystemClock.elapsedRealtime();
         if (current==null || (current.view!=null && current.text.length()==0))
             showDiagnostic("Voz detectada. Traduciendo al idioma contrario…");
         long now=SystemClock.elapsedRealtime();
@@ -180,6 +218,7 @@ public final class SmartFkInputMethod extends InputMethodService {
 
     private void acceptFinal(String lang,String words) {
         if (!active || speaking || words.trim().isEmpty()) return;
+        lastRecognizedAudio = SystemClock.elapsedRealtime();
         showDiagnostic("Traduciendo frase reconocida…");
         partialSerial++;
         final long token=session;
