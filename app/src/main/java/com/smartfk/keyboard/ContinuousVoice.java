@@ -18,6 +18,7 @@ import java.io.InputStream;
 /** Single AudioRecord session. Does NOT restart on silence or while TTS is playing. */
 final class ContinuousVoice {
     interface Events {
+        void status(String state);
         void partial(String source, String words);
         void finalWords(String source, String words);
         void error(String message);
@@ -67,6 +68,7 @@ final class ContinuousVoice {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
         AudioRecord r = null;
         try {
+            events.status("Cargando motores de voz sin Internet…");
             String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
                 .getString("source_language","auto");
             boolean useTr = !"es".equals(mode);
@@ -90,6 +92,9 @@ final class ContinuousVoice {
                 recorder = r;
                 if (!running) return;
                 r.startRecording();
+                if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
+                    throw new IllegalStateException("No se pudo iniciar la grabación");
+                events.status("");
                 short[] chunk = new short[1600];
                 long lastPartial = 0;
                 while (running) {
