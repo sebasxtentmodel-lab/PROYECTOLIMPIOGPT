@@ -88,7 +88,7 @@ public final class SmartFkInputMethod extends InputMethodService {
         touchSurface.setBackgroundColor(Color.TRANSPARENT);
         touchSurface.setOnTouchListener(new ThreeZoneGestures());
         panel.addView(touchSurface,new FrameLayout.LayoutParams(-1,-1));
-        for (Section s : sections) drawSection(s);
+        for (Section s : sections) { s.view = null; drawSection(s); }
         return panel;
     }
 
