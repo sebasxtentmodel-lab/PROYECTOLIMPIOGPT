@@ -50,8 +50,20 @@ for i in $(seq 1 150); do
   fi
   sleep 2
 done
-adb shell am start -n com.smartfk.keyboard/.SetupActivity
+# Infinix devices may have Google TTS/Play services disabled.
+# The basic mic→text translator must launch even with no TTS package.
+adb shell pm disable-user --user 0 com.google.android.tts >/dev/null 2>&1 || true
+adb shell am force-stop com.smartfk.keyboard
+adb shell am start -W -n com.smartfk.keyboard/.SetupActivity
 sleep 3
+adb shell uiautomator dump /sdcard/smartfk-setup.xml >/dev/null
+adb exec-out cat /sdcard/smartfk-setup.xml > /tmp/smartfk-setup.xml
+grep -q 'SmartFk' /tmp/smartfk-setup.xml || {
+  echo "FAILED: Setup screen isn't visible with Google TTS disabled"
+  adb logcat -d -s AndroidRuntime:E '*:S' | tail -90
+  exit 1
+}
+echo 'PASS: SmartFk SetupActivity opens even with Google TTS disabled.'
 
 IME_ID=""
 for i in $(seq 1 20); do
