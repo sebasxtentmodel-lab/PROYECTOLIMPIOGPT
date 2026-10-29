@@ -70,7 +70,7 @@ final class ContinuousVoice {
         try {
             events.status("Cargando motores de voz sin Internet…");
             String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
-                .getString("source_language","auto");
+                .getString("source_language","tr");
             boolean useTr = !"es".equals(mode);
             boolean useEs = !"tr".equals(mode);
             File turkish = useTr ? materialize("models/tr") : null;
