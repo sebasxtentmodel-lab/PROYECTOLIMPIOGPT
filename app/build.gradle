@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 android {
     namespace 'com.smartfk.keyboard'
@@ -8,8 +9,8 @@ android {
         applicationId 'com.smartfk.keyboard'
         minSdk 29
         targetSdk 35
-        versionCode 14
-        versionName '0.11.1-whisper-base-staging'
+        versionCode 15
+        versionName '0.12.0-sherpa-turkish-qa'
         ndk { abiFilters 'arm64-v8a', 'x86_64' }
     }
     androidResources { noCompress += ['bin', 'spm'] }
@@ -23,5 +24,6 @@ android {
 }
 dependencies {
     implementation 'com.alphacephei:vosk-android:0.3.47'
+    implementation 'com.github.k2-fsa:sherpa-onnx:v1.13.8'
 
 }
