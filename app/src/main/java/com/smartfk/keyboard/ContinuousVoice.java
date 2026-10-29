@@ -121,6 +121,7 @@ final class ContinuousVoice {
     }
     private void stopCaptureOnly(){
         running=false;
+        audioQueue.clear(); // Never delay the next IME session draining stale audio
         AudioRecord r=microphone;
         if(r!=null)try{r.stop();}catch(Exception ignored){}
     }
@@ -136,11 +137,23 @@ final class ContinuousVoice {
             int minimum=AudioRecord.getMinBufferSize(SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
             if(minimum<=0)throw new IllegalStateException("16 kHz PCM no disponible");
-            r=new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,
-                Math.max(minimum*2,FRAMES*4));
+            int size=Math.max(minimum*4,FRAMES*8);
+            // Some Android Go vendor audio HALs do not expose VOICE_RECOGNITION
+            // in 16 kHz PCM. A normal MIC fallback is better than a silent IME.
+            try {
+                r=new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,size);
+            } catch (IllegalArgumentException | UnsupportedOperationException ex) {
+                android.util.Log.w("SmartFk","VOICE_RECOGNITION source unavailable",ex);
+            }
+            if(r==null || r.getState()!=AudioRecord.STATE_INITIALIZED) {
+                if(r!=null){r.release();r=null;}
+                r=new AudioRecord(MediaRecorder.AudioSource.MIC,SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,size);
+                events.status("Micrófono Android normal habilitado (compatibilidad).");
+            }
             if(r.getState()!=AudioRecord.STATE_INITIALIZED)
-                throw new IllegalStateException("AudioRecord no se inicializó");
+                throw new IllegalStateException("No se inicializó ningún origen de micrófono");
             microphone=r;
             if(!running)return;
             r.startRecording();
