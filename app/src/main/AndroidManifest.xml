@@ -2,8 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-    <!-- ML Kit models need an initial download: current alpha is NOT first-install offline. -->
-    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- No internet permission: ASR, translation models, and TTS all run locally. -->
     <uses-feature android:name="android.hardware.microphone" android:required="true"/>
     <application android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:label="SmartFk" android:icon="@drawable/ic_launcher"
