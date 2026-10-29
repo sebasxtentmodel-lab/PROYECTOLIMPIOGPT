@@ -525,7 +525,7 @@ public final class SmartFkInputMethod extends InputMethodService {
             boolean fullscreen, boolean candidatesOnly) {
         super.onConfigureWindow(window,false,candidatesOnly);
     }
-    @Override public boolean onEvaluateInputViewShown() { return true; }
+    @Override public boolean onEvaluateInputViewShown() { super.onEvaluateInputViewShown(); return true; }
     @Override public void onFinishInputView(boolean finishingInput) {
         active=false; session++; queue.clear(); partialSerial++;
         translationRequestId++; translating=false; current=null;
