@@ -19,12 +19,19 @@ import java.util.concurrent.Executors;
 final class OfflineTranslation {
     interface Callback { void onSuccess(String value); void onFailure(String reason); }
     private final Context app;
-    private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{
+    /**
+     * WM Bergamot's native logger is process-global: constructing multiple
+     * independent native services throws "logger with name 'general' already
+     * exists". One executor and one native service must be shared by Setup,
+     * the IME and debug tests for the entire Android process lifetime.
+     */
+    private static final ExecutorService WORKER=Executors.newSingleThreadExecutor(r->{
         Thread t=new Thread(r,"smartfk-bergamot");t.setPriority(Thread.NORM_PRIORITY-1);return t;
     });
+    private static final Object NATIVE_LOCK=new Object();
     private final Handler main=new Handler(Looper.getMainLooper());
-    private long service, first, second;
-    private String loadedRoute="";
+    private static long service, first, second;
+    private static String loadedRoute="";
     private volatile boolean closed;
     private volatile boolean libraryOk;
     // At most one unfinished preview is queued. Every newer hypothesis replaces it.
@@ -54,10 +61,10 @@ final class OfflineTranslation {
     }
     void prepareSource(String src,Callback cb) {
         if (!libraryOk) { error(cb,"Motor Bergamot no cargó"); return; }
-        worker.execute(()->{
+        WORKER.execute(()->{
             try {
                 if(closed) return;
-                setup(src);
+                synchronized(NATIVE_LOCK){ setup(src); }
                 ok(cb,src.equals("tr")?"Modelo neuronal turco → español listo":
                     "Modelo neuronal español → turco listo");
             }catch(Throwable ex){error(cb,describe(ex));}
@@ -66,7 +73,7 @@ final class OfflineTranslation {
     void translate(String source,String phrase,Callback cb) {
         if (phrase==null || phrase.trim().isEmpty()) return;
         if (!libraryOk) { error(cb,"Falta biblioteca nativa Bergamot");return; }
-        worker.execute(()->{
+        WORKER.execute(()->{
             if(closed)return;
             try { ok(cb,translateNow(source,phrase)); }
             catch(Throwable e){error(cb,describe(e));}
@@ -85,7 +92,7 @@ final class OfflineTranslation {
         latestPreview=new Preview(source,phrase,cb);
         if(previewScheduled)return;
         previewScheduled=true;
-        worker.execute(this::drainOnePreview);
+        WORKER.execute(this::drainOnePreview);
     }
 
     private void drainOnePreview() {
@@ -96,7 +103,7 @@ final class OfflineTranslation {
             catch(Throwable e){error(item.callback,describe(e));}
         }
         synchronized(this) {
-            if(latestPreview!=null && !closed) worker.execute(this::drainOnePreview);
+            if(latestPreview!=null && !closed) WORKER.execute(this::drainOnePreview);
             else previewScheduled=false;
         }
     }
@@ -117,14 +124,16 @@ final class OfflineTranslation {
         return text;
     }
     private String translateNow(String source,String phrase) throws Exception {
-        setup("es".equals(source)?"es":"tr");
-        byte[][] inputs={prepareText(source,phrase).getBytes(StandardCharsets.UTF_8)};
-        byte[][] result=BergamotNative.nativePivot(service,first,second,inputs);
-        if(result==null || result.length==0 || result[0]==null)
-            throw new IllegalStateException("Bergamot devolvió resultado vacío");
-        String translated=new String(result[0],StandardCharsets.UTF_8).trim();
-        if(translated.isEmpty())throw new IllegalStateException("Modelo sin salida");
-        return translated;
+        synchronized(NATIVE_LOCK){
+            setup("es".equals(source)?"es":"tr");
+            byte[][] inputs={prepareText(source,phrase).getBytes(StandardCharsets.UTF_8)};
+            byte[][] result=BergamotNative.nativePivot(service,first,second,inputs);
+            if(result==null || result.length==0 || result[0]==null)
+                throw new IllegalStateException("Bergamot devolvió resultado vacío");
+            String translated=new String(result[0],StandardCharsets.UTF_8).trim();
+            if(translated.isEmpty())throw new IllegalStateException("Modelo sin salida");
+            return translated;
+        }
     }
     private void setup(String source) throws Exception {
         if(source.equals(loadedRoute)&&first!=0&&second!=0)return;
@@ -173,12 +182,9 @@ final class OfflineTranslation {
     private void error(Callback cb,String msg){main.post(()->{if(!closed)cb.onFailure(msg);});}
     private String describe(Throwable e){return e.getClass().getSimpleName()+": "+e.getMessage();}
     void close(){
+        // Invalidate this owner's callbacks. Never destroy/recreate the shared
+        // native service during Setup↔keyboard switches; its logger is global.
         closed=true;
-        worker.execute(()->{
-            try{releaseRoute();
-                if(service!=0){BergamotNative.nativeFreeService(service);service=0;}
-            }catch(Throwable ignored){}
-        });
-        worker.shutdown();
+        synchronized(this){latestPreview=null;}
     }
 }
