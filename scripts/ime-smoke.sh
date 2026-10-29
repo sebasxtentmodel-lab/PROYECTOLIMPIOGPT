@@ -10,7 +10,7 @@ sleep 3
 
 IME_ID=""
 for i in $(seq 1 20); do
-  IME_ID=$(adb shell ime list -s | tr -d '\r' | grep -m1 'com.smartfk.keyboard' || true)
+  IME_ID=$(adb shell ime list -a -s | tr -d '\r' | grep -m1 'com.smartfk.keyboard' || true)
   if [[ -n "$IME_ID" ]]; then break; fi
   sleep 2
 done
