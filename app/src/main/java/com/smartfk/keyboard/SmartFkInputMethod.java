@@ -36,6 +36,9 @@ public final class SmartFkInputMethod extends InputMethodService {
     private boolean ttsReady;
     private boolean speaking;
     private String utteranceId = "";
+    private final ArrayDeque<String> speechChunks = new ArrayDeque<>();
+    private long translationRequestId = 0;
+    private boolean followingLatest = true;
     private boolean active;
     private long session = 0;
     private long partialSerial = 0;
@@ -96,6 +99,14 @@ public final class SmartFkInputMethod extends InputMethodService {
         super.onStartInputView(info,restarting);
         active = true;
         session++;
+        // No unconfirmed words or in-flight translations may leak across IME sessions.
+        queue.clear();
+        translating = false;
+        translationRequestId++;
+        partialSerial++;
+        lastPartialRequest = 0;
+        current = null;
+        followingLatest = true;
         final long token = session;
         translate.prepare(new OfflineTranslation.Callback() {
             @Override public void onSuccess(String text) {
@@ -119,6 +130,8 @@ public final class SmartFkInputMethod extends InputMethodService {
             @Override public void onSuccess(String translation) {
                 ui.post(() -> {
                     if (!active || session!=token || serial!=partialSerial || speaking) return;
+                    // A provisional hypothesis must never replace a different speaker's block.
+                    if (current != null && !current.source.equals(lang)) return;
                     Section s = ensureSection(lang);
                     s.preview = translation.trim();
                     render(s);
@@ -132,7 +145,9 @@ public final class SmartFkInputMethod extends InputMethodService {
         if (!active || speaking || words.trim().isEmpty()) return;
         partialSerial++;
         final long token=session;
-        queue.add(new Recognition(lang,words,token));
+        if (current != null) current.preview = "";
+        Section destination=ensureSection(lang);
+        queue.add(new Recognition(lang,words,token,destination));
         processQueue();
     }
 
@@ -141,12 +156,14 @@ public final class SmartFkInputMethod extends InputMethodService {
         Recognition item=queue.poll();
         if (item.session!=session || !active) { processQueue(); return; }
         translating=true;
+        final long reqId = ++translationRequestId;
         translate.translate(item.source,item.text,new OfflineTranslation.Callback() {
             @Override public void onSuccess(String value) {
                 ui.post(() -> {
+                    if (reqId != translationRequestId) return;
                     translating=false;
                     if (active && session==item.session && !value.trim().isEmpty()) {
-                        Section s=ensureSection(item.source);
+                        Section s=item.destination;
                         if (s.text.length()>0) s.text.append(' ');
                         s.text.append(value.trim());
                         s.preview="";
@@ -156,7 +173,12 @@ public final class SmartFkInputMethod extends InputMethodService {
                 });
             }
             @Override public void onFailure(String msg) {
-                ui.post(() -> { translating=false; processQueue(); });
+                ui.post(() -> {
+                    if (reqId != translationRequestId) return;
+                    translating=false;
+                    android.util.Log.e("SmartFk","Error al traducir: "+msg);
+                    processQueue();
+                });
             }
         });
     }
@@ -187,17 +209,17 @@ public final class SmartFkInputMethod extends InputMethodService {
         if (s.view==null) return;
         String full=s.text.toString();
         if (!s.preview.isEmpty()) full += (full.isEmpty()?"":" ") + s.preview;
-        boolean nearBottom=scroller==null || scroller.getChildAt(0)==null ||
-            scroller.getScrollY()+scroller.getHeight()+dp(36)>=history.getHeight();
+        boolean nearBottom = followingLatest && (scroller == null ||
+            scroller.getScrollY()+scroller.getHeight()+dp(48)>=history.getHeight());
         s.view.setText(full);
         if (nearBottom && scroller!=null)
             scroller.post(() -> scroller.fullScroll(View.FOCUS_DOWN));
     }
 
-    private Section displayedSection() {
+    private Section displayedSection(float touchY) {
         if (sections.isEmpty()) return null;
         if (scroller==null) return sections.get(sections.size()-1);
-        int center=scroller.getScrollY()+scroller.getHeight()/2;
+        int center=scroller.getScrollY()+(int)touchY;
         Section closest=sections.get(sections.size()-1);
         int distance=Integer.MAX_VALUE;
         for (Section s : sections) {
@@ -209,25 +231,25 @@ public final class SmartFkInputMethod extends InputMethodService {
         return closest;
     }
 
-    private void playOrStop() {
+    private void playOrStop(float touchY) {
         if (speaking) {
             // AudioRecord remains open: only ASR decoding was suppressed.
             speaking=false;
-            microphone.setSpeechPlayback(false);
             utteranceId="";
+            speechChunks.clear();
             if (tts!=null) tts.stop();
+            microphone.setSpeechPlayback(false);
             return;
         }
-        Section s=displayedSection();
+        Section s=displayedSection(touchY);
         if (s==null || s.text.length()==0 || !ttsReady) return;
         Locale lang="tr".equals(s.source) ? new Locale("es","ES") : new Locale("tr","TR");
         if (!selectOfflineVoice(lang)) return;
         speaking=true;
         microphone.setSpeechPlayback(true);
-        final String id="smartfk-"+SystemClock.uptimeMillis();
-        utteranceId=id;
-        int rc=tts.speak(s.text.toString(),TextToSpeech.QUEUE_FLUSH,null,id);
-        if (rc==TextToSpeech.ERROR) completedSpeech(id);
+        speechChunks.clear();
+        splitForSpeech(s.text.toString());
+        speakNextChunk();
     }
 
     private boolean selectOfflineVoice(Locale locale) {
@@ -243,12 +265,44 @@ public final class SmartFkInputMethod extends InputMethodService {
         return false;
     }
 
+    private void splitForSpeech(String text) {
+        int max = Math.min(2000,TextToSpeech.getMaxSpeechInputLength()-16);
+        String remaining = text.trim();
+        while (!remaining.isEmpty()) {
+            int len = Math.min(max,remaining.length());
+            if (len < remaining.length()) {
+                int split = remaining.lastIndexOf(' ',len);
+                if (split >= len / 2) len = split;
+            }
+            speechChunks.add(remaining.substring(0,len).trim());
+            remaining = remaining.substring(len).trim();
+        }
+    }
+
+    private void speakNextChunk() {
+        if (!speaking) return;
+        String next=speechChunks.pollFirst();
+        if (next==null) {
+            finishSpeech();
+            return;
+        }
+        final String id="smartfk-"+SystemClock.uptimeMillis();
+        utteranceId=id;
+        if (tts.speak(next,TextToSpeech.QUEUE_FLUSH,null,id)==TextToSpeech.ERROR)
+            finishSpeech();
+    }
+
+    private void finishSpeech() {
+        utteranceId="";
+        speechChunks.clear();
+        speaking=false;
+        if (microphone!=null) microphone.setSpeechPlayback(false);
+    }
+
     private void completedSpeech(String id) {
         ui.post(() -> {
             if (!id.equals(utteranceId)) return;
-            utteranceId="";
-            speaking=false;
-            if (microphone!=null) microphone.setSpeechPlayback(false);
+            speakNextChunk();
         });
     }
 
@@ -285,13 +339,20 @@ public final class SmartFkInputMethod extends InputMethodService {
                         if (longPress!=null) ui.removeCallbacks(longPress);
                     }
                     if (zone==2 && scroller!=null) {
-                        scroller.scrollBy(0,Math.round(lastY-e.getY()));
+                        int amount=Math.round(lastY-e.getY());
+                        scroller.scrollBy(0,amount);
+                        // Never auto-jump to newest while the user reads older sections.
+                        followingLatest = false;
                     }
                     lastY=e.getY();
                     return true;
                 case MotionEvent.ACTION_UP:
                     if (longPress!=null) ui.removeCallbacks(longPress);
-                    if (!moved && !held && zone==0) playOrStop();
+                    if (zone==2 && scroller!=null) {
+                        followingLatest = scroller.getScrollY()+scroller.getHeight()+dp(48)
+                            >= history.getHeight();
+                    }
+                    if (!moved && !held && zone==0) playOrStop(e.getY());
                     return true;
                 case MotionEvent.ACTION_CANCEL:
                     if (longPress!=null) ui.removeCallbacks(longPress);
@@ -308,7 +369,8 @@ public final class SmartFkInputMethod extends InputMethodService {
     @Override public boolean onEvaluateFullscreenMode() { return false; }
     @Override public void onFinishInputView(boolean finishingInput) {
         active=false; session++; queue.clear(); partialSerial++;
-        speaking=false; utteranceId="";
+        translationRequestId++; translating=false; current=null;
+        speaking=false; utteranceId=""; speechChunks.clear();
         if (tts!=null) tts.stop();
         microphone.setSpeechPlayback(false);
         microphone.stop();
@@ -321,9 +383,10 @@ public final class SmartFkInputMethod extends InputMethodService {
         super.onDestroy();
     }
     private static final class Recognition {
-        final String source,text; final long session;
-        Recognition(String source,String text,long session) {
+        final String source,text; final long session; final Section destination;
+        Recognition(String source,String text,long session,Section destination) {
             this.source=source;this.text=text;this.session=session;
+            this.destination=destination;
         }
     }
     private static final class Section {
