@@ -35,7 +35,7 @@ final class ContinuousVoice {
     private String previousLanguage = "tr";
     private volatile boolean resetAfterPlayback;
     private long lastEmittedEndMs;
-    private long lastVoskAt;
+    private volatile long lastVoskAt;
 
     ContinuousVoice(Context context, Events events) {
         this.context = context.getApplicationContext();
@@ -74,7 +74,7 @@ final class ContinuousVoice {
             events.status("Cargando motores de voz sin Internet…");
             String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
                 .getString("source_language","tr");
-            whisper = new WhisperFallback(context,events,mode);
+            whisper = new WhisperFallback(context,events,mode,()->lastVoskAt);
             boolean useTr = !"es".equals(mode);
             boolean useEs = !"tr".equals(mode);
             File turkish = useTr ? materialize("models/tr") : null;
