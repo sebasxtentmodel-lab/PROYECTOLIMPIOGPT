@@ -2,6 +2,7 @@ name: SmartFk Android APK
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 concurrency:
   group: smartfk-neural-${{ github.ref }}
@@ -11,6 +12,7 @@ permissions:
   actions: read
 jobs:
   build:
+    name: STAGING · Compile offline engines
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -27,20 +29,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Reuse official Vosk Turkish and Spanish models
-        uses: actions/download-artifact@v4
-        with:
-          name: SmartFk-debug-apk
-          run-id: 40838866923
-          github-token: ${{ github.token }}
-          path: /tmp/smartfk-prev
-      - name: Install official Vosk ASR models
-        shell: bash
-        run: |
-          set -euo pipefail
-          unzip -qq /tmp/smartfk-prev/app-debug.apk 'assets/models/*' -d /tmp/smartfk-unpack
-          mkdir -p app/src/main/assets/models
-          cp -a /tmp/smartfk-unpack/assets/models/. app/src/main/assets/models/
+      - name: Download official Turkish and Spanish Vosk models
+        run: python3 scripts/bundle_vosk_models.py
       - name: Bundle and verify real Mozilla neural models and WM native engines
         run: |
           python3 -m pip install --quiet zstandard
@@ -57,8 +47,8 @@ jobs:
           ffmpeg -hide_banner -loglevel error -y -i /tmp/smartfk-tr.wav -ar 16000 -ac 1 -c:a pcm_s16le -f s16le app/src/debug/assets/tr_fixture.pcm
           ffmpeg -hide_banner -loglevel error -y -i /tmp/smartfk-es.wav -ar 16000 -ac 1 -c:a pcm_s16le -f s16le app/src/debug/assets/es_fixture.pcm
           ls -lh app/src/debug/assets/*.pcm
-      - name: Build offline Android APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Build staging and unsigned production APKs
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
       - name: Verify complete ASR and neural assets in APK
         run: |
           set -euo pipefail
@@ -92,7 +82,7 @@ jobs:
             --exclude='local.properties' \
             ./ "$STAGE/"
           cat > "$STAGE/LEEME_COMPILAR.txt" <<'INSTRUCTIONS'
-          PROYECTOLIMPIOGPT - SmartFk 0.10.2 - CODIGO COMPLETO
+          PROYECTOLIMPIOGPT - SmartFk 0.11.0 - CODIGO COMPLETO
           
           Incluye:
            * Proyecto Android Studio, codigo Java, Gradle y Gradle Wrapper
@@ -113,35 +103,42 @@ jobs:
           la precision de conversacion en ese telefono.
           INSTRUCTIONS
           cd /tmp/smartfk-source-export
-          zip -q -r /tmp/PROYECTOLIMPIOGPT_SmartFk_0.10.2_COMPLETO.zip PROYECTOLIMPIOGPT
-          unzip -tq /tmp/PROYECTOLIMPIOGPT_SmartFk_0.10.2_COMPLETO.zip
-          ls -lh /tmp/PROYECTOLIMPIOGPT_SmartFk_0.10.2_COMPLETO.zip
-          sha256sum /tmp/PROYECTOLIMPIOGPT_SmartFk_0.10.2_COMPLETO.zip
+          zip -q -r /tmp/PROYECTOLIMPIOGPT_SmartFk_0.11.0_COMPLETO.zip PROYECTOLIMPIOGPT
+          unzip -tq /tmp/PROYECTOLIMPIOGPT_SmartFk_0.11.0_COMPLETO.zip
+          ls -lh /tmp/PROYECTOLIMPIOGPT_SmartFk_0.11.0_COMPLETO.zip
+          sha256sum /tmp/PROYECTOLIMPIOGPT_SmartFk_0.11.0_COMPLETO.zip
       - name: Publish complete editable SmartFk project ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PROYECTOLIMPIOGPT-SmartFk-0.10.2-FULL-PROJECT-ZIP
-          path: /tmp/PROYECTOLIMPIOGPT_SmartFk_0.10.2_COMPLETO.zip
+          name: PROYECTOLIMPIOGPT-SmartFk-0.11.0-FULL-PROJECT-ZIP
+          path: /tmp/PROYECTOLIMPIOGPT_SmartFk_0.11.0_COMPLETO.zip
           if-no-files-found: error
           compression-level: 0
       - name: Publish SmartFk APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartFk-0.10.2-audio-fixed-apk
+          name: SmartFk-0.11.0-STAGING-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Preserve unsigned release for private production signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartFk-0.11.0-UNSIGNED-release
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
   emulator-smoke:
-    name: Android 13 keyboard and neural translator smoke test
+    name: STAGING · Android 13 offline voice and keyboard tests
     needs: build
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: SmartFk-0.10.2-audio-fixed-apk
+          name: SmartFk-0.11.0-STAGING-apk
           path: /tmp/apk
       - name: Enable KVM
         run: |
