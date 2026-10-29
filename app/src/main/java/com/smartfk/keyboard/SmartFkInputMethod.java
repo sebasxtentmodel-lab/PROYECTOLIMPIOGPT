@@ -69,6 +69,7 @@ public final class SmartFkInputMethod extends InputMethodService {
             @Override public void error(String detail) {
                 // Setup activity is responsible for diagnostics, keeping the IME text-only.
                 android.util.Log.e("SmartFk", detail);
+                getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit().putString("last_asr_error",detail).apply();
             }
         });
     }
@@ -116,6 +117,7 @@ public final class SmartFkInputMethod extends InputMethodService {
                 android.util.Log.e("SmartFk",err);
             }
         });
+        getSharedPreferences("smartfk",Context.MODE_PRIVATE).edit().remove("last_asr_error").apply();
         microphone.start();
     }
 
