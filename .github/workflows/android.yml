@@ -52,6 +52,61 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartFk-0.2.0-alpha-apk
+          name: SmartFk-0.5.0-alpha-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+  emulator-smoke:
+    name: Test keyboard opening on Android 13 emulator
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartFk-0.5.0-alpha-apk
+          path: /tmp/apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Start Android emulator and test IME activation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          script: |
+            set -e
+            adb install /tmp/apk/app-debug.apk
+            adb shell pm grant com.smartfk.keyboard android.permission.RECORD_AUDIO
+            adb shell ime enable com.smartfk.keyboard/.SmartFkInputMethod
+            adb shell ime set com.smartfk.keyboard/.SmartFkInputMethod
+            adb shell am start -n com.smartfk.keyboard/.SetupActivity
+            sleep 4
+            adb shell input swipe 400 1400 400 470 400
+            sleep 2
+            adb shell uiautomator dump /sdcard/smartfk-ui.xml
+            adb exec-out cat /sdcard/smartfk-ui.xml > /tmp/smartfk-ui.xml
+            python3 - <<'PY'
+            import re, subprocess, xml.etree.ElementTree as ET
+            tree=ET.parse('/tmp/smartfk-ui.xml')
+            fields=[n for n in tree.iter() if n.get('class')=='android.widget.EditText']
+            if not fields: raise RuntimeError('SmartFk text field not found')
+            m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',fields[0].get('bounds',''))
+            if not m: raise RuntimeError('EditText missing bounds')
+            x1,y1,x2,y2=map(int,m.groups())
+            subprocess.check_call(['adb','shell','input','tap',str((x1+x2)//2),str((y1+y2)//2)])
+            PY
+            sleep 12
+            adb shell dumpsys input_method | grep -q 'com.smartfk.keyboard'
+            adb logcat -d -v brief > /tmp/smartfk-logcat.txt
+            if grep -A 12 'FATAL EXCEPTION' /tmp/smartfk-logcat.txt | grep -q 'com.smartfk.keyboard'; then
+              grep -A 25 'FATAL EXCEPTION' /tmp/smartfk-logcat.txt | tail -50
+              exit 1
+            fi
+            echo 'Android 13: app installed, keyboard selected, no SmartFk fatal crash'
