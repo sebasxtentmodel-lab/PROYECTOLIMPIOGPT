@@ -31,6 +31,8 @@ final class ContinuousVoice {
     private Thread worker;
     private boolean pendingStart;
     private String previousLanguage = "tr";
+    private volatile boolean resetAfterPlayback;
+    private long lastEmittedEndMs;
 
     ContinuousVoice(Context context, Events events) {
         this.context = context.getApplicationContext();
@@ -56,18 +58,27 @@ final class ContinuousVoice {
         if (r != null) try { r.stop(); } catch (Exception ignored) {}
     }
 
-    void setSpeechPlayback(boolean playing) { suppressRecognition = playing; }
+    void setSpeechPlayback(boolean playing) {
+        suppressRecognition = playing;
+        if (playing) resetAfterPlayback = true;
+    }
 
     private void capture() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
         AudioRecord r = null;
         try {
-            File turkish = materialize("models/tr");
-            File spanish = materialize("models/es");
-            try (Model mTr = new Model(turkish.getAbsolutePath());
-                 Model mEs = new Model(spanish.getAbsolutePath());
-                 Recognizer tr = new Recognizer(mTr, 16000.0f);
-                 Recognizer es = new Recognizer(mEs, 16000.0f)) {
+            String mode = context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
+                .getString("source_language","auto");
+            boolean useTr = !"es".equals(mode);
+            boolean useEs = !"tr".equals(mode);
+            File turkish = useTr ? materialize("models/tr") : null;
+            File spanish = useEs ? materialize("models/es") : null;
+            try (Model mTr = useTr ? new Model(turkish.getAbsolutePath()) : null;
+                 Model mEs = useEs ? new Model(spanish.getAbsolutePath()) : null;
+                 Recognizer tr = useTr ? new Recognizer(mTr, 16000.0f) : null;
+                 Recognizer es = useEs ? new Recognizer(mEs, 16000.0f) : null) {
+                if (tr != null) tr.setWords(true);
+                if (es != null) es.setWords(true);
                 int buffer = AudioRecord.getMinBufferSize(16000,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
                 if (buffer <= 0) throw new IllegalStateException("Micrófono PCM16 de 16kHz no disponible");
@@ -85,19 +96,31 @@ final class ContinuousVoice {
                     int count = r.read(chunk, 0, chunk.length, AudioRecord.READ_BLOCKING);
                     if (count < 0) throw new IllegalStateException("Error AudioRecord: " + count);
                     if (count == 0 || suppressRecognition) continue;
-                    boolean trEnd = tr.acceptWaveForm(chunk, count);
-                    boolean esEnd = es.acceptWaveForm(chunk, count);
+                    if (resetAfterPlayback) {
+                        // Discard the half-recognized sentence heard before TTS playback.
+                        if (tr != null) tr.reset();
+                        if (es != null) es.reset();
+                        resetAfterPlayback = false;
+                        lastEmittedEndMs = 0;
+                    }
+                    boolean trEnd = tr != null && tr.acceptWaveForm(chunk, count);
+                    boolean esEnd = es != null && es.acceptWaveForm(chunk, count);
                     if (trEnd || esEnd) {
                         Candidate a = candidate(trEnd ? tr.getResult() : "", "tr");
                         Candidate b = candidate(esEnd ? es.getResult() : "", "es");
                         Candidate choice = select(a,b);
                         if (!choice.words.isEmpty()) {
-                            previousLanguage = choice.lang;
-                            events.finalWords(choice.lang, choice.words);
+                            long now = android.os.SystemClock.elapsedRealtime();
+                            // Opposite-language recognizer may finalize the SAME sound later.
+                            if (now - lastEmittedEndMs >= 1050) {
+                                previousLanguage = choice.lang;
+                                events.finalWords(choice.lang, choice.words);
+                                lastEmittedEndMs = now;
+                            }
                         }
-                    } else if (android.os.SystemClock.elapsedRealtime() - lastPartial >= 650) {
-                        Candidate a = candidate(tr.getPartialResult(), "tr");
-                        Candidate b = candidate(es.getPartialResult(), "es");
+                    } else if (android.os.SystemClock.elapsedRealtime() - lastPartial >= 400) {
+                        Candidate a = candidate(tr == null ? "" : tr.getPartialResult(), "tr");
+                        Candidate b = candidate(es == null ? "" : es.getPartialResult(), "es");
                         Candidate choice = select(a,b);
                         if (!choice.words.isEmpty()) events.partial(choice.lang, choice.words);
                         lastPartial = android.os.SystemClock.elapsedRealtime();
@@ -127,8 +150,8 @@ final class ContinuousVoice {
     private Candidate select(Candidate a, Candidate b) {
         if (a.words.isEmpty()) return b;
         if (b.words.isEmpty()) return a;
-        double sa = a.score + (a.lang.equals(previousLanguage) ? 0.08 : 0);
-        double sb = b.score + (b.lang.equals(previousLanguage) ? 0.08 : 0);
+        double sa = a.score + (a.lang.equals(previousLanguage) ? 0.035 : 0);
+        double sb = b.score + (b.lang.equals(previousLanguage) ? 0.035 : 0);
         return sa >= sb ? a : b;
     }
 
