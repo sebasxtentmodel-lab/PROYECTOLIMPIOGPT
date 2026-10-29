@@ -88,9 +88,9 @@ public final class AsrSmokeTestActivity extends Activity {
         Log.i(TAG,lang.toUpperCase()+"_AUDIO_TRANSLATED="+translation.get());
     }
     private void testWhisper(String lang,String fixture) throws Exception {
-        File path=new File(getCacheDir(),"ggml-tiny-q5_1.bin");
-        if(!path.isFile() || path.length()<30_000_000L)
-            copyFile("whisper/ggml-tiny-q5_1.bin",path);
+        File path=new File(getCacheDir(),"ggml-base-q5_1.bin");
+        if(!path.isFile() || path.length()<50_000_000L)
+            copyFile("whisper/ggml-base-q5_1.bin",path);
         byte[] bytes;
         try(InputStream in=getAssets().open(fixture)){
             java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
