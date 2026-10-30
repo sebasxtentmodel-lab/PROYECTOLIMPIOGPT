@@ -1,7 +1,6 @@
 package com.smartfk.keyboard;
 
 import android.content.Context;
-import android.os.SystemClock;
 import com.wasimaster.wmkeyboard.core.voice.whisper.WhisperCpp;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,7 +22,7 @@ import java.util.function.LongSupplier;
 final class WhisperFallback {
     private static final int RATE=16000;
     private static final int FRAME=RATE/10; // 100 ms RMS windows
-    private static final int MIN_SPEECH=RATE; // avoid decoding pure clicks
+    private static final int MIN_SPEECH=RATE*3/10; // allow short replies: evet, hayır, sí, no
     private static final int END_SILENCE=RATE*7/10;
     private static final int PRE_ROLL=RATE/4;
     private static final int MAX_SEGMENT=RATE*6;
@@ -135,7 +134,11 @@ final class WhisperFallback {
             String source,words;
             if(specializedTurkish && specializedWorking){
                 if(turkishEngine==null)turkishEngine=new TurkishSherpa(context);
-                words=turkishEngine.transcribe(segment.pcm);
+                // The ONNX Whisper backend needs at least 1 s even for a
+                // 300-ms word. Pad with silence, never throw away short replies.
+                short[] pcm=segment.pcm.length<RATE?
+                    Arrays.copyOf(segment.pcm,RATE):segment.pcm;
+                words=turkishEngine.transcribe(pcm);
                 source="tr";
             }else{
                 String result=runWhisperCpp(segment.pcm);
