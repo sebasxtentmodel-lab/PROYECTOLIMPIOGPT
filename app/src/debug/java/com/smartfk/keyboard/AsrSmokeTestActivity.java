@@ -24,6 +24,7 @@ public final class AsrSmokeTestActivity extends Activity {
             try {
                 // Real voice PCM → Vosk → Bergamot → translated text.
                 String turkish = testSherpaTurkish();
+                testSherpaStreaming();
                 testVosk("tr","tr_fixture.pcm");
                 String spanish = testVosk("es","es_fixture.pcm");
                 if(turkish.trim().isEmpty() || spanish.trim().isEmpty())
@@ -87,6 +88,61 @@ public final class AsrSmokeTestActivity extends Activity {
         if(failure.get()!=null || translation.get()==null || translation.get().trim().isEmpty())
             throw new IllegalStateException("Voice → translation failed "+lang+": "+failure.get());
         Log.i(TAG,lang.toUpperCase()+"_AUDIO_TRANSLATED="+translation.get());
+    }
+    /**
+     * Feed the same streaming segmenter used by SmartFk's live keyboard.
+     * A single big sample is NOT equivalent to short rolling speech turns.
+     */
+    private void testSherpaStreaming() throws Exception {
+        byte[] bytes;
+        try(InputStream in=getAssets().open("tr_fixture.pcm")){
+            java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
+            byte[] b=new byte[8192];int n;
+            while((n=in.read(b))!=-1)out.write(b,0,n);
+            bytes=out.toByteArray();
+        }
+        final StringBuilder text=new StringBuilder();
+        final java.util.concurrent.CountDownLatch translated=
+            new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicReference<String> failure=
+            new java.util.concurrent.atomic.AtomicReference<>("");
+        ContinuousVoice.Events events=new ContinuousVoice.Events(){
+            @Override public void status(String s){}
+            @Override public void audioLevel(int a,boolean silenced){}
+            @Override public void partial(String lang,String words){}
+            @Override public void finalWords(String lang,String words){
+                if("tr".equals(lang) && !words.trim().isEmpty()){
+                    synchronized(text){
+                        if(text.length()>0)text.append(' ');
+                        text.append(words.trim());
+                    }
+                    translated.countDown();
+                }
+            }
+            @Override public void error(String error){failure.set(error);}
+        };
+        WhisperFallback recognizer=new WhisperFallback(this,events,"tr",()->0L);
+        try {
+            short[] frame=new short[1600];
+            for(int offset=0;offset<bytes.length;offset+=3200){
+                int samples=Math.min(frame.length,(bytes.length-offset)/2);
+                java.util.Arrays.fill(frame,(short)0);
+                for(int i=0;i<samples;i++){
+                    int p=offset+i*2;
+                    frame[i]=(short)((bytes[p]&0xff)|(bytes[p+1]<<8));
+                }
+                recognizer.feed(frame,samples,0L);
+                Thread.sleep(20); // preserve asynchronous producer/consumer separation
+            }
+            short[] quiet=new short[1600];
+            for(int i=0;i<20;i++){recognizer.feed(quiet,quiet.length,0L);Thread.sleep(20);}
+            if(!translated.await(90,java.util.concurrent.TimeUnit.SECONDS))
+                throw new IllegalStateException("No Turkish translation turn from rolling audio: "
+                    +failure.get());
+            // Inference on one window may still be processing when another ends.
+            Thread.sleep(3000);
+            Log.i(TAG,"TR_SHERPA_STREAM_RESULT="+text.toString().trim());
+        }finally{recognizer.close();}
     }
     private String testSherpaTurkish() throws Exception {
         byte[] pcm;
