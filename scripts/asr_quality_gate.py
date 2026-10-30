@@ -34,7 +34,7 @@ ok=True
 for language, expected in REFERENCE.items():
     ref=normalize(expected)
     options=[]
-    for engine in (("VOSK","WHISPER","SHERPA") if language=="TR" else ("VOSK","WHISPER")):
+    for engine in (("VOSK","WHISPER","SHERPA","SHERPA_STREAM") if language=="TR" else ("VOSK","WHISPER")):
         matches=re.findall(rf"{language}_{engine}_RESULT=(.*)",DATA)
         raw=matches[-1].strip() if matches else ""
         # Whisper emits language code and newline; "tr" or "es" alone is NOT transcription.
