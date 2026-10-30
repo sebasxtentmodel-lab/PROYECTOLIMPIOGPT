@@ -5,8 +5,8 @@ on:
     tags: ['v*']
   workflow_dispatch:
 concurrency:
-  group: smartfk-neural-${{ github.ref }}
-  cancel-in-progress: true
+  group: smartfk-build-${{ github.sha }}
+  cancel-in-progress: false
 permissions:
   contents: read
   actions: read
