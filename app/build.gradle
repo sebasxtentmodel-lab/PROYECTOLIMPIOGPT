@@ -14,6 +14,18 @@ android {
         ndk { abiFilters 'arm64-v8a', 'x86_64' }
     }
     androidResources { noCompress += ['bin', 'spm', 'onnx', 'txt'] }
+    // sherpa-onnx AAR/JVM jar contains native binaries for desktop operating
+    // systems. Those are not executable on Android and inflated the APK >100 MB.
+    packaging {
+        resources {
+            excludes += [
+                'sherpa-onnx/native/**',
+                '**/native/osx-*/**',
+                '**/native/win-*/**',
+                '**/native/linux-*/**'
+            ]
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
