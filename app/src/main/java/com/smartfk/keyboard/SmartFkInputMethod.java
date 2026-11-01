@@ -62,7 +62,7 @@ public final class SmartFkInputMethod extends InputMethodService {
                     if (!active) return;
                     if (state.isEmpty()) {
                         String mode=getSharedPreferences("smartfk",Context.MODE_PRIVATE)
-                            .getString("source_language","tr");
+                            .getString("source_language","auto");
                         showDiagnostic("Escuchando " + ("es".equals(mode)?"español":
                             "auto".equals(mode)?"turco o español":"turco") +
                             "… Habla para iniciar la traducción.");
@@ -239,8 +239,13 @@ public final class SmartFkInputMethod extends InputMethodService {
                     translating=false;
                     if (active && session==item.session && !value.trim().isEmpty()) {
                         Section s=item.destination;
-                        if (s.text.length()>0) s.text.append(' ');
-                        s.text.append(value.trim());
+                        // Append only new confirmed words when ASR windows overlap.
+                        // Previously confirmed text is never deleted or rewritten.
+                        String fresh = RollingText.newTail(s.text, value);
+                        if (!fresh.isEmpty()) {
+                            if (s.text.length()>0) s.text.append(' ');
+                            s.text.append(fresh);
+                        }
                         clearDiagnostic();
                         s.preview="";
                         render(s);
