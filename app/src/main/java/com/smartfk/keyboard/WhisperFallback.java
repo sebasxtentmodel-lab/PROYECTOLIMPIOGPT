@@ -58,7 +58,8 @@ final class WhisperFallback {
         this.events=events;
         this.configuredSource=configuredSource;
         this.latestVoskResult=latestVoskResult;
-        specializedTurkish=!"es".equals(configuredSource);
+        // Do not run Turkish-only ONNX inference on Spanish audio in auto mode.
+        specializedTurkish=LanguageMode.useTurkishSpecialist(configuredSource);
     }
     boolean prefersTurkishFinals(){return specializedTurkish && specializedWorking;}
 
