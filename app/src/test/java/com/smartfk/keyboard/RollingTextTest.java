@@ -8,7 +8,7 @@ public class RollingTextTest {
         assertEquals("Hola, ¿cómo estás?", RollingText.newTail("", " Hola, ¿cómo estás? "));
     }
     @Test public void overlapAppendsOnlyNewWords() {
-        assertEquals("contigo mañana.", RollingText.newTail(
+        assertEquals("mañana.", RollingText.newTail(
             "Hola, me gustaría hablar contigo", "me gustaría hablar contigo mañana."));
     }
     @Test public void longRepeatedSentenceIsIgnored() {
