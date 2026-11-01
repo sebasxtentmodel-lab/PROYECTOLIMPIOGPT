@@ -54,3 +54,14 @@ GitHub Actions `SmartFk Android APK`: descarga y verifica los modelos Vosk, los 
 5. Realizar una prueba real de 30–60 minutos con cambios de aplicación y pantalla encendida.
 
 No se agregará un modo de grabación de otras aplicaciones ni un servicio persistente con pantalla apagada sin autorización y requisitos específicos.
+
+
+## SmartFk 0.12.4 — mejoras en evaluación
+
+- Idioma predeterminado: detección automática **solo entre español y turco**. Las instalaciones con idioma elegido explícitamente conservan esa preferencia.
+- El reconocedor especializado turco **ya no se ejecuta en modo automático sobre voz española**, evitando finales erróneamente etiquetados como turcos. El modo turco fijo conserva su motor especializado.
+- El historial de traducción confirmada solo añade texto nuevo: se eliminan solapamientos idénticos de tres o más palabras sin borrar el texto anterior. Se conservan las repeticiones breves intencionales.
+- Pruebas JUnit de acumulación y dirección automática.
+- Los controles de calidad de ASR siguen vigentes. La compilación de staging no debe confundirse con validación en el Infinix ni con una APK de producción.
+
+**Limitaciones vigentes:** la precisión turca fue insuficiente en los datos sintéticos de la versión anterior; tampoco están demostradas la latencia en el Infinix ni las sesiones de micrófono de larga duración. Esta actualización corrige lógica de dirección y acumulación, pero no certifica precisión del motor.
