@@ -55,8 +55,8 @@ final class ContinuousVoice {
     }
     private String currentMode() {
         String mode=context.getSharedPreferences("smartfk",Context.MODE_PRIVATE)
-            .getString("source_language","tr");
-        return "es".equals(mode)||"auto".equals(mode) ? mode:"tr";
+            .getString("source_language","auto");
+        return LanguageMode.normalized(mode);
     }
 
     synchronized void start() {
